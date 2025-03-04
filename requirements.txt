@@ -1,0 +1,6 @@
+flask==2.0.1
+gunicorn==20.1.0
+praat-parselmouth==0.4.3
+numpy==1.22.3
+soundfile==0.10.3.post1
+werkzeug==2.0.1
