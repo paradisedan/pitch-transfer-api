@@ -1,5 +1,6 @@
 # app.py
 from flask import Flask, request, send_file, jsonify
+from flask_cors import CORS  # Import Flask-CORS
 from werkzeug.utils import secure_filename
 import os
 import uuid
@@ -9,6 +10,13 @@ import numpy as np
 import soundfile as sf
 
 app = Flask(__name__)
+
+# Enable CORS for all routes
+CORS(app, resources={r"/*": {
+    "origins": "*",  # Allow all origins, or specify allowed domains like ["https://yourdomain.com"]
+    "methods": ["GET", "POST", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization"]
+}})
 
 # Configure upload folder
 UPLOAD_FOLDER = '/tmp'
@@ -59,11 +67,11 @@ def health_check():
 @app.route('/process', methods=['POST'])
 def process_audio():
     # Check if files exist in request
-    if 'source' not in request.files or 'target' not in request.files:
+    if 'source_audio' not in request.files or 'target_audio' not in request.files:
         return jsonify({"error": "Missing source or target file"}), 400
     
-    source_file = request.files['source']
-    target_file = request.files['target']
+    source_file = request.files['source_audio']
+    target_file = request.files['target_audio']
     
     # Check if filenames are valid
     if source_file.filename == '' or target_file.filename == '':
