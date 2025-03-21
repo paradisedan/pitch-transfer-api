@@ -8,12 +8,17 @@ import parselmouth
 from parselmouth.praat import call
 import numpy as np
 import soundfile as sf
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
 # Enable CORS for all routes
 CORS(app, resources={r"/*": {
-    "origins": "*",  # Allow all origins, or specify allowed domains like ["https://yourdomain.com"]
+    "origins": "*",  # Allow all origins
     "methods": ["GET", "POST", "OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization"]
 }})
@@ -27,12 +32,40 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def convert_to_wav_if_needed(input_file, output_file=None):
+    """Convert audio to WAV format if it's not already WAV."""
+    if not output_file:
+        output_file = os.path.splitext(input_file)[0] + '.wav'
+    
+    # Check if already WAV format
+    if input_file.lower().endswith('.wav'):
+        # Just copy the file
+        import shutil
+        shutil.copy(input_file, output_file)
+        return output_file
+    
+    try:
+        # Load audio file
+        data, samplerate = sf.read(input_file)
+        # Save as WAV
+        sf.write(output_file, data, samplerate, subtype='PCM_16')
+        return output_file
+    except Exception as e:
+        logger.error(f"Error converting file {input_file}: {str(e)}")
+        raise
+
 def transfer_pitch(source_file, target_file, output_file):
     """Extract pitch from source_file and apply it to target_file."""
     try:
+        # Convert to WAV if needed
+        source_wav = convert_to_wav_if_needed(source_file)
+        target_wav = convert_to_wav_if_needed(target_file)
+        
+        logger.info(f"Processing files: source={source_wav}, target={target_wav}")
+        
         # Load sound files
-        source_sound = parselmouth.Sound(source_file)
-        target_sound = parselmouth.Sound(target_file)
+        source_sound = parselmouth.Sound(source_wav)
+        target_sound = parselmouth.Sound(target_wav)
         
         # Extract pitch from source
         source_pitch = source_sound.to_pitch()
@@ -56,8 +89,15 @@ def transfer_pitch(source_file, target_file, output_file):
         # Save the output
         sf.write(output_file, y, int(sample_rate))
         
+        # Clean up temporary WAV files if they were created
+        if source_wav != source_file and os.path.exists(source_wav):
+            os.remove(source_wav)
+        if target_wav != target_file and os.path.exists(target_wav):
+            os.remove(target_wav)
+            
         return True, "Processing successful"
     except Exception as e:
+        logger.error(f"Error in transfer_pitch: {str(e)}")
         return False, str(e)
 
 @app.route('/health', methods=['GET'])
@@ -66,12 +106,17 @@ def health_check():
 
 @app.route('/process', methods=['POST'])
 def process_audio():
+    logger.info("Received pitch transfer request")
+    
     # Check if files exist in request
     if 'source_audio' not in request.files or 'target_audio' not in request.files:
-        return jsonify({"error": "Missing source or target file"}), 400
+        logger.error("Missing source_audio or target_audio in request")
+        return jsonify({"error": "Missing source_audio or target_audio file"}), 400
     
     source_file = request.files['source_audio']
     target_file = request.files['target_audio']
+    
+    logger.info(f"Received files: source={source_file.filename} ({source_file.content_type}), target={target_file.filename} ({target_file.content_type})")
     
     # Check if filenames are valid
     if source_file.filename == '' or target_file.filename == '':
@@ -95,6 +140,8 @@ def process_audio():
         source_file.save(source_path)
         target_file.save(target_path)
         
+        logger.info(f"Saved files to: source={source_path}, target={target_path}")
+        
         # Process audio files
         success, message = transfer_pitch(source_path, target_path, output_path)
         
@@ -103,7 +150,10 @@ def process_audio():
             for path in [source_path, target_path]:
                 if os.path.exists(path):
                     os.remove(path)
+            logger.error(f"Processing failed: {message}")
             return jsonify({"error": f"Processing failed: {message}"}), 500
+        
+        logger.info(f"Processing successful, returning file: {output_path}")
         
         # Return the processed file
         response = send_file(output_path, as_attachment=True, 
@@ -120,6 +170,7 @@ def process_audio():
         return response
         
     except Exception as e:
+        logger.error(f"Error in process_audio: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
