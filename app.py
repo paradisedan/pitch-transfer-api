@@ -1,5 +1,5 @@
 # app.py
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, request, send_file, jsonify, after_this_request
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
@@ -10,8 +10,10 @@ import numpy as np
 import soundfile as sf
 import logging
 import time
-from functools import wraps
-import shutil
+import wave
+import io
+import tempfile
+import subprocess
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
@@ -33,36 +35,6 @@ ALLOWED_EXTENSIONS = {'wav', 'mp3', 'ogg', 'flac'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 
-# Basic rate limiting
-REQUEST_HISTORY = {}
-MAX_REQUESTS_PER_MINUTE = 10
-
-def rate_limit(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        ip = request.remote_addr
-        current_time = time.time()
-        
-        # Clean up old entries
-        for key in list(REQUEST_HISTORY.keys()):
-            if current_time - REQUEST_HISTORY[key][-1] > 60:
-                del REQUEST_HISTORY[key]
-        
-        # Check rate limit
-        if ip in REQUEST_HISTORY:
-            requests = REQUEST_HISTORY[ip]
-            requests = [t for t in requests if current_time - t < 60]
-            
-            if len(requests) >= MAX_REQUESTS_PER_MINUTE:
-                return jsonify({"error": "Rate limit exceeded. Please try again later."}), 429
-            
-            REQUEST_HISTORY[ip] = requests + [current_time]
-        else:
-            REQUEST_HISTORY[ip] = [current_time]
-        
-        return func(*args, **kwargs)
-    return wrapper
-
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -75,25 +47,43 @@ def safe_remove(file_path):
     except Exception as e:
         logger.error(f"Error removing file {file_path}: {str(e)}")
 
-def convert_to_wav_if_needed(input_file, output_file=None):
-    """Convert audio to WAV format if it's not already WAV."""
-    if not output_file:
-        output_file = os.path.splitext(input_file)[0] + '.wav'
-    
-    # Check if already WAV format
-    if input_file.lower().endswith('.wav'):
-        # Just copy the file
-        try:
-            shutil.copy(input_file, output_file)
-            logger.info(f"Copied WAV file from {input_file} to {output_file}")
-            return output_file
-        except Exception as e:
-            logger.error(f"Error copying WAV file: {str(e)}")
-            raise
-    
+def convert_to_wav_with_ffmpeg(input_file, output_file):
+    """Use ffmpeg to convert audio to WAV format."""
     try:
+        logger.info(f"Converting {input_file} to WAV using ffmpeg")
+        # Use ffmpeg to convert to standard WAV format
+        cmd = [
+            'ffmpeg', '-y', 
+            '-i', input_file, 
+            '-acodec', 'pcm_s16le',  # 16-bit PCM
+            '-ar', '44100',          # 44.1kHz sample rate
+            '-ac', '1',              # Mono
+            output_file
+        ]
+        
+        # Run the ffmpeg command
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logger.error(f"ffmpeg conversion failed: {result.stderr}")
+            raise Exception(f"ffmpeg conversion failed: {result.stderr}")
+        
+        # Verify the file was created successfully
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            logger.info(f"Successfully converted to WAV: {output_file} ({os.path.getsize(output_file)} bytes)")
+            return output_file
+        else:
+            logger.error(f"Failed to create WAV file at {output_file}")
+            raise Exception(f"Failed to create WAV file at {output_file}")
+    except Exception as e:
+        logger.error(f"Error converting file {input_file}: {str(e)}")
+        raise
+
+def convert_to_wav_with_soundfile(input_file, output_file):
+    """Convert audio to WAV format using soundfile."""
+    try:
+        logger.info(f"Converting {input_file} to WAV using soundfile")
         # Load audio file
-        logger.info(f"Converting {input_file} to WAV format at {output_file}")
         data, samplerate = sf.read(input_file)
         
         # Save as WAV with explicit format
@@ -107,8 +97,139 @@ def convert_to_wav_if_needed(input_file, output_file=None):
             logger.error(f"Failed to create WAV file at {output_file}")
             raise Exception(f"Failed to create WAV file at {output_file}")
     except Exception as e:
-        logger.error(f"Error converting file {input_file}: {str(e)}")
+        logger.error(f"Error converting file with soundfile {input_file}: {str(e)}")
         raise
+
+def convert_to_wav(input_file, output_file=None):
+    """Convert audio to WAV format using multiple methods."""
+    if not output_file:
+        output_file = os.path.splitext(input_file)[0] + '.wav'
+    
+    # Try multiple methods to convert to WAV
+    try:
+        # First try with ffmpeg if available
+        try:
+            return convert_to_wav_with_ffmpeg(input_file, output_file)
+        except Exception as e:
+            logger.warning(f"ffmpeg conversion failed, trying soundfile: {str(e)}")
+        
+        # If ffmpeg fails, try with soundfile
+        return convert_to_wav_with_soundfile(input_file, output_file)
+    except Exception as e:
+        logger.error(f"All conversion methods failed for {input_file}: {str(e)}")
+        raise
+
+def save_sound_to_wav_direct(sound, output_file):
+    """Save a Parselmouth Sound object to a WAV file using direct Parselmouth save."""
+    try:
+        # Save directly with Parselmouth
+        logger.info(f"Saving sound directly with Parselmouth to {output_file}")
+        sound.save(output_file, "WAV")
+        
+        # Verify the file was created successfully
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            logger.info(f"Successfully saved WAV file: {output_file} ({os.path.getsize(output_file)} bytes)")
+            return True
+        else:
+            logger.error(f"Failed to create WAV file at {output_file}")
+            return False
+    except Exception as e:
+        logger.error(f"Error saving sound with Parselmouth: {str(e)}")
+        return False
+
+def save_sound_to_wav_wave(sound, output_file):
+    """Save a Parselmouth Sound object to a WAV file using the wave module."""
+    try:
+        # Get values and parameters from the Sound object
+        y = np.array(sound.values)
+        sample_rate = int(sound.sampling_frequency)
+        
+        # Normalize the audio to 16-bit range
+        max_val = np.max(np.abs(y))
+        if max_val > 0:
+            y = y / max_val * 32767
+        
+        # Convert to 16-bit integers
+        y = y.astype(np.int16)
+        
+        # Create a wave file
+        with wave.open(output_file, 'wb') as wf:
+            wf.setnchannels(1)  # Mono
+            wf.setsampwidth(2)  # 2 bytes for 16-bit audio
+            wf.setframerate(sample_rate)
+            wf.writeframes(y.tobytes())
+        
+        # Verify the file was created successfully
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            logger.info(f"Successfully saved WAV file with wave module: {output_file} ({os.path.getsize(output_file)} bytes)")
+            return True
+        else:
+            logger.error(f"Failed to create WAV file at {output_file}")
+            return False
+    except Exception as e:
+        logger.error(f"Error saving sound with wave module: {str(e)}")
+        return False
+
+def save_sound_to_wav_soundfile(sound, output_file):
+    """Save a Parselmouth Sound object to a WAV file using soundfile."""
+    try:
+        # Get values and parameters from the Sound object
+        y = np.array(sound.values)
+        sample_rate = int(sound.sampling_frequency)
+        
+        # Save using soundfile
+        sf.write(output_file, y, sample_rate, subtype='PCM_16', format='WAV')
+        
+        # Verify the file was created successfully
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            logger.info(f"Successfully saved WAV file with soundfile: {output_file} ({os.path.getsize(output_file)} bytes)")
+            return True
+        else:
+            logger.error(f"Failed to create WAV file at {output_file}")
+            return False
+    except Exception as e:
+        logger.error(f"Error saving sound with soundfile: {str(e)}")
+        return False
+
+def save_sound_to_wav(sound, output_file):
+    """Save a Parselmouth Sound object to a WAV file using multiple methods."""
+    # Try multiple methods to save the sound
+    
+    # First try with direct Parselmouth save
+    if save_sound_to_wav_direct(sound, output_file):
+        return True
+    
+    logger.warning("Direct Parselmouth save failed, trying wave module")
+    
+    # If direct save fails, try with wave module
+    if save_sound_to_wav_wave(sound, output_file):
+        return True
+    
+    logger.warning("Wave module save failed, trying soundfile")
+    
+    # If wave module fails, try with soundfile
+    if save_sound_to_wav_soundfile(sound, output_file):
+        return True
+    
+    # If all methods fail, try saving to a temporary file and using ffmpeg
+    try:
+        logger.warning("All direct save methods failed, trying with temporary file and ffmpeg")
+        temp_file = os.path.join(os.path.dirname(output_file), f"temp_{uuid.uuid4()}.wav")
+        
+        # Try to save with any method to a temporary file
+        if (save_sound_to_wav_direct(sound, temp_file) or 
+            save_sound_to_wav_wave(sound, temp_file) or 
+            save_sound_to_wav_soundfile(sound, temp_file)):
+            
+            # If successful, use ffmpeg to convert to a standard format
+            convert_to_wav_with_ffmpeg(temp_file, output_file)
+            safe_remove(temp_file)
+            return True
+    except Exception as e:
+        logger.error(f"Temporary file and ffmpeg approach failed: {str(e)}")
+    
+    logger.error("All save methods failed")
+    return False
 
 def transfer_pitch(source_file, target_file, output_file):
     """Extract pitch from source_file and apply it to target_file."""
@@ -122,20 +243,24 @@ def transfer_pitch(source_file, target_file, output_file):
             return False, "Source and target files are the same"
             
         # Convert to WAV if needed
-        source_wav = convert_to_wav_if_needed(source_file, os.path.join(os.path.dirname(source_file), f"source_{uuid.uuid4()}.wav"))
-        target_wav = convert_to_wav_if_needed(target_file, os.path.join(os.path.dirname(target_file), f"target_{uuid.uuid4()}.wav"))
+        source_wav = convert_to_wav(source_file, os.path.join(os.path.dirname(source_file), f"source_{uuid.uuid4()}.wav"))
+        target_wav = convert_to_wav(target_file, os.path.join(os.path.dirname(target_file), f"target_{uuid.uuid4()}.wav"))
         
         logger.info(f"Processing files: source={source_wav}, target={target_wav}")
         
         # Load sound files
         logger.info(f"Loading source sound from {source_wav}")
         source_sound = parselmouth.Sound(source_wav)
+        logger.info(f"Source sound loaded: duration={source_sound.duration} seconds, sampling frequency={source_sound.sampling_frequency} Hz")
+        
         logger.info(f"Loading target sound from {target_wav}")
         target_sound = parselmouth.Sound(target_wav)
+        logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
         # Extract pitch from source
         logger.info("Extracting pitch from source")
         source_pitch = source_sound.to_pitch()
+        logger.info(f"Source pitch extracted: {source_pitch}")
         
         # Manipulate the target sound with the source pitch
         logger.info("Creating manipulation object")
@@ -152,18 +277,16 @@ def transfer_pitch(source_file, target_file, output_file):
         # Generate new sound
         logger.info("Generating new sound")
         new_sound = call(manipulation, "Get resynthesis (overlap-add)")
-        
-        # Convert to numpy array for saving with soundfile
-        logger.info("Converting to numpy array")
-        y = np.array(new_sound.values)
-        sample_rate = new_sound.sampling_frequency
+        logger.info(f"New sound generated: duration={new_sound.duration} seconds, sampling frequency={new_sound.sampling_frequency} Hz")
         
         # Make sure the output directory exists
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
-        # Save the output - specify PCM_16 format explicitly
-        logger.info(f"Saving output to {output_file} with sample rate {int(sample_rate)}")
-        sf.write(output_file, y, int(sample_rate), subtype='PCM_16', format='WAV')
+        # Save the output using our multi-method approach
+        logger.info(f"Saving output to {output_file}")
+        if not save_sound_to_wav(new_sound, output_file):
+            logger.error("All save methods failed")
+            return False, "Failed to save output file"
         
         # Verify the file was created successfully
         if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
@@ -171,6 +294,24 @@ def transfer_pitch(source_file, target_file, output_file):
             return False, f"Failed to create output file at {output_file}"
             
         logger.info(f"Successfully created output file: {output_file} ({os.path.getsize(output_file)} bytes)")
+        
+        # Try to validate the output file by reading it back
+        try:
+            logger.info("Validating output file by reading it back")
+            with wave.open(output_file, 'rb') as wf:
+                logger.info(f"Output file validation: channels={wf.getnchannels()}, sample width={wf.getsampwidth()}, framerate={wf.getframerate()}, frames={wf.getnframes()}")
+        except Exception as e:
+            logger.warning(f"Output file validation failed: {str(e)}")
+            # Try to fix the file with ffmpeg
+            try:
+                logger.info("Attempting to fix output file with ffmpeg")
+                fixed_output = os.path.join(os.path.dirname(output_file), f"fixed_{uuid.uuid4()}.wav")
+                convert_to_wav_with_ffmpeg(output_file, fixed_output)
+                os.replace(fixed_output, output_file)
+                logger.info(f"Fixed output file: {output_file}")
+            except Exception as fix_error:
+                logger.error(f"Failed to fix output file: {str(fix_error)}")
+                return False, f"Output file validation failed: {str(e)}"
         
         return True, "Processing successful"
     except Exception as e:
@@ -188,11 +329,11 @@ def health_check():
     return jsonify({"status": "healthy"})
 
 @app.route('/process', methods=['POST'])
-@rate_limit
 def process_audio():
     source_path = None
     target_path = None
     output_path = None
+    temp_files = []
     
     try:
         logger.info("Received pitch transfer request")
@@ -227,6 +368,8 @@ def process_audio():
         target_path = os.path.join(app.config['UPLOAD_FOLDER'], target_filename)
         output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
         
+        temp_files.extend([source_path, target_path, output_path])
+        
         source_file.save(source_path)
         target_file.save(target_path)
         
@@ -260,35 +403,42 @@ def process_audio():
         
         logger.info(f"Processing successful, returning file: {output_path} ({os.path.getsize(output_path)} bytes)")
         
+        # Set up cleanup function
+        @after_this_request
+        def cleanup(response):
+            def do_cleanup():
+                logger.info("Cleaning up temporary files")
+                for file_path in temp_files:
+                    safe_remove(file_path)
+            
+            # Schedule cleanup for after response is sent
+            from threading import Timer
+            Timer(1.0, do_cleanup).start()
+            return response
+        
         # Return the processed file
-        response = send_file(output_path, 
-                            as_attachment=True, 
-                            download_name="processed_audio.wav",
-                            mimetype="audio/wav")
-        
-        # Clean up files after sending response
-        @response.call_on_close
-        def cleanup():
-            logger.info("Cleaning up temporary files")
-            safe_remove(source_path)
-            safe_remove(target_path)
-            safe_remove(output_path)
-        
-        return response
+        return send_file(output_path, 
+                        as_attachment=True, 
+                        download_name="processed_audio.wav",
+                        mimetype="audio/wav")
         
     except Exception as e:
         logger.error(f"Error in process_audio: {str(e)}")
         # Clean up files in case of error
-        if source_path:
-            safe_remove(source_path)
-        if target_path:
-            safe_remove(target_path)
-        if output_path:
-            safe_remove(output_path)
+        for file_path in temp_files:
+            safe_remove(file_path)
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     # Create upload folder if it doesn't exist
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    
+    # Check if ffmpeg is available
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+        logger.info("ffmpeg is available: " + result.stdout.split('\n')[0])
+    except Exception as e:
+        logger.warning(f"ffmpeg is not available: {str(e)}")
+    
     # Run the app
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
