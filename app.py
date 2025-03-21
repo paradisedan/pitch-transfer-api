@@ -71,6 +71,7 @@ def safe_remove(file_path):
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
+            logger.info(f"Removed file: {file_path}")
     except Exception as e:
         logger.error(f"Error removing file {file_path}: {str(e)}")
 
@@ -84,6 +85,7 @@ def convert_to_wav_if_needed(input_file, output_file=None):
         # Just copy the file
         try:
             shutil.copy(input_file, output_file)
+            logger.info(f"Copied WAV file from {input_file} to {output_file}")
             return output_file
         except Exception as e:
             logger.error(f"Error copying WAV file: {str(e)}")
@@ -91,10 +93,19 @@ def convert_to_wav_if_needed(input_file, output_file=None):
     
     try:
         # Load audio file
+        logger.info(f"Converting {input_file} to WAV format at {output_file}")
         data, samplerate = sf.read(input_file)
-        # Save as WAV
-        sf.write(output_file, data, samplerate, subtype='PCM_16')
-        return output_file
+        
+        # Save as WAV with explicit format
+        sf.write(output_file, data, samplerate, subtype='PCM_16', format='WAV')
+        
+        # Verify the file was created successfully
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            logger.info(f"Successfully converted to WAV: {output_file} ({os.path.getsize(output_file)} bytes)")
+            return output_file
+        else:
+            logger.error(f"Failed to create WAV file at {output_file}")
+            raise Exception(f"Failed to create WAV file at {output_file}")
     except Exception as e:
         logger.error(f"Error converting file {input_file}: {str(e)}")
         raise
@@ -107,6 +118,7 @@ def transfer_pitch(source_file, target_file, output_file):
     try:
         # Ensure source and target are different files
         if os.path.samefile(source_file, target_file):
+            logger.error("Source and target files are the same")
             return False, "Source and target files are the same"
             
         # Convert to WAV if needed
@@ -116,30 +128,49 @@ def transfer_pitch(source_file, target_file, output_file):
         logger.info(f"Processing files: source={source_wav}, target={target_wav}")
         
         # Load sound files
+        logger.info(f"Loading source sound from {source_wav}")
         source_sound = parselmouth.Sound(source_wav)
+        logger.info(f"Loading target sound from {target_wav}")
         target_sound = parselmouth.Sound(target_wav)
         
         # Extract pitch from source
+        logger.info("Extracting pitch from source")
         source_pitch = source_sound.to_pitch()
         
         # Manipulate the target sound with the source pitch
+        logger.info("Creating manipulation object")
         manipulation = call(target_sound, "To Manipulation", 0.01, 75, 600)
         
         # Extract pitch tier from source pitch
+        logger.info("Extracting pitch tier")
         pitch_tier = call(source_pitch, "Down to PitchTier")
         
         # Replace pitch in manipulation object
+        logger.info("Replacing pitch tier")
         call([pitch_tier, manipulation], "Replace pitch tier")
         
         # Generate new sound
+        logger.info("Generating new sound")
         new_sound = call(manipulation, "Get resynthesis (overlap-add)")
         
         # Convert to numpy array for saving with soundfile
+        logger.info("Converting to numpy array")
         y = np.array(new_sound.values)
         sample_rate = new_sound.sampling_frequency
         
-        # Save the output
-        sf.write(output_file, y, int(sample_rate))
+        # Make sure the output directory exists
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        
+        # Save the output - specify PCM_16 format explicitly
+        logger.info(f"Saving output to {output_file} with sample rate {int(sample_rate)}")
+        sf.write(output_file, y, int(sample_rate), subtype='PCM_16', format='WAV')
+        
+        # Verify the file was created successfully
+        if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
+            logger.error(f"Failed to create output file at {output_file}")
+            return False, f"Failed to create output file at {output_file}"
+            
+        logger.info(f"Successfully created output file: {output_file} ({os.path.getsize(output_file)} bytes)")
         
         return True, "Processing successful"
     except Exception as e:
@@ -178,10 +209,12 @@ def process_audio():
         
         # Check if filenames are valid
         if source_file.filename == '' or target_file.filename == '':
+            logger.error("Empty filename provided")
             return jsonify({"error": "No selected file"}), 400
         
         # Check file extensions
         if not (allowed_file(source_file.filename) and allowed_file(target_file.filename)):
+            logger.error(f"Invalid file types: source={source_file.filename}, target={target_file.filename}")
             return jsonify({"error": "File type not allowed"}), 400
         
         # Create unique filenames with different UUIDs
@@ -199,23 +232,44 @@ def process_audio():
         
         logger.info(f"Saved files to: source={source_path}, target={target_path}")
         
+        # Check if files were saved correctly
+        if not os.path.exists(source_path) or not os.path.exists(target_path):
+            logger.error("Failed to save uploaded files")
+            return jsonify({"error": "Failed to save uploaded files"}), 500
+            
+        if os.path.getsize(source_path) == 0 or os.path.getsize(target_path) == 0:
+            logger.error("Uploaded files are empty")
+            return jsonify({"error": "Uploaded files are empty"}), 400
+        
         # Process audio files
+        logger.info(f"Starting pitch transfer process: source={source_path}, target={target_path}, output={output_path}")
         success, message = transfer_pitch(source_path, target_path, output_path)
         
         if not success:
             logger.error(f"Processing failed: {message}")
             return jsonify({"error": f"Processing failed: {message}"}), 500
         
-        logger.info(f"Processing successful, returning file: {output_path}")
+        # Check if output file exists and is not empty
+        if not os.path.exists(output_path):
+            logger.error(f"Output file does not exist: {output_path}")
+            return jsonify({"error": "Output file was not created"}), 500
+            
+        if os.path.getsize(output_path) == 0:
+            logger.error(f"Output file is empty: {output_path}")
+            return jsonify({"error": "Output file is empty"}), 500
+        
+        logger.info(f"Processing successful, returning file: {output_path} ({os.path.getsize(output_path)} bytes)")
         
         # Return the processed file
-        response = send_file(output_path, as_attachment=True, 
+        response = send_file(output_path, 
+                            as_attachment=True, 
                             download_name="processed_audio.wav",
                             mimetype="audio/wav")
         
         # Clean up files after sending response
         @response.call_on_close
         def cleanup():
+            logger.info("Cleaning up temporary files")
             safe_remove(source_path)
             safe_remove(target_path)
             safe_remove(output_path)
