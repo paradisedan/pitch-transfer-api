@@ -314,44 +314,64 @@ def transfer_pitch(source_file, target_file, output_file,
         
         # If preserve_formants is True, try to maintain the original formants
         if preserve_formants:
-            logger.info("Preserving formants using LPC analysis")
+            logger.info("Preserving formants using alternative methods")
             try:
                 if resynthesis_method.lower() == "lpc":
                     # LPC already preserves formants by design
                     logger.info("Using LPC resynthesis which inherently preserves formants")
                 else:
-                    # Extract LPC coefficients from target for later use
-                    logger.info("Extracting LPC coefficients from target audio")
-                    target_lpc = call(target_sound, "To LPC (autocorrelation)", 16, 0.025, 0.005, 50.0)
-                    logger.info("Successfully extracted LPC coefficients")
+                    # Try different methods for formant preservation
+                    # Method 1: Extract formant structure from target for later use
+                    logger.info("Extracting formant structure from target audio")
+                    target_formant = call(target_sound, "To Formant (burg)", 0.01, 5, 5500, 0.025, 50)
+                    logger.info("Successfully extracted formant structure")
             except Exception as e:
-                logger.warning(f"Failed to prepare LPC analysis: {str(e)}")
+                logger.warning(f"Failed to prepare formant analysis: {str(e)}")
         
         # Generate new sound with selected resynthesis method
         logger.info(f"Generating new sound using resynthesis method: {resynthesis_method}")
         try:
-            new_sound = call(manipulation, resynthesis_command)
-            logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
-            
-            # Apply LPC-based formant preservation if needed
-            if preserve_formants and resynthesis_method.lower() != "lpc" and 'target_lpc' in locals():
-                try:
-                    logger.info("Applying LPC-based formant preservation")
-                    # Apply the target formants using LPC filtering
-                    new_sound = call([new_sound, target_lpc], "Filter")
-                    logger.info("Successfully preserved formants using LPC filtering")
-                except Exception as e:
-                    logger.warning(f"Failed to apply LPC-based formant preservation: {str(e)}")
+            # If using LPC resynthesis and we want to preserve formants, use a special approach
+            if preserve_formants and resynthesis_method.lower() == "lpc":
+                logger.info("Using LPC resynthesis with formant preservation")
+                new_sound = call(manipulation, "Get resynthesis (LPC)")
+                logger.info(f"New sound generated with LPC: duration={new_sound.duration} seconds")
+            else:
+                new_sound = call(manipulation, resynthesis_command)
+                logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
+                
+                # Apply formant preservation if needed and not using LPC resynthesis
+                if preserve_formants and 'target_formant' in locals():
+                    try:
+                        logger.info("Applying formant-based correction")
+                        # Create a FormantGrid from the Formant object
+                        formant_grid = call(target_formant, "Down to FormantGrid")
+                        
+                        # Apply the formant correction using FormantGrid
+                        new_sound = call([new_sound, formant_grid], "Filter with one formant")
+                        logger.info("Successfully applied formant correction")
+                    except Exception as e:
+                        logger.warning(f"Failed to apply formant correction: {str(e)}")
+                        try:
+                            # Alternative approach: Use LPC resynthesis directly
+                            logger.info("Trying alternative formant preservation approach")
+                            # Create a new manipulation from the modified sound
+                            temp_manip = call(new_sound, "To Manipulation", time_step, min_pitch, max_pitch)
+                            # Use LPC resynthesis on this manipulation
+                            new_sound = call(temp_manip, "Get resynthesis (LPC)")
+                            logger.info("Successfully applied alternative formant preservation")
+                        except Exception as e2:
+                            logger.warning(f"Failed to apply alternative formant preservation: {str(e2)}")
         except Exception as e:
             logger.warning(f"Failed to use {resynthesis_method} method: {str(e)}. Falling back to overlap-add.")
             new_sound = call(manipulation, "Get resynthesis (overlap-add)")
             logger.info(f"New sound generated with fallback method: duration={new_sound.duration} seconds")
             
             # Try to apply LPC-based formant preservation to the fallback sound
-            if preserve_formants and 'target_lpc' in locals():
+            if preserve_formants and 'target_formant' in locals():
                 try:
                     logger.info("Applying LPC-based formant preservation to fallback sound")
-                    new_sound = call([new_sound, target_lpc], "Filter")
+                    new_sound = call([new_sound, target_formant], "Filter")
                     logger.info("Successfully preserved formants on fallback sound")
                 except Exception as e:
                     logger.warning(f"Failed to apply LPC-based formant preservation to fallback sound: {str(e)}")
