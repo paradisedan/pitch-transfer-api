@@ -450,5 +450,5 @@ if __name__ == '__main__':
     except (subprocess.SubprocessError, FileNotFoundError):
         logger.warning("ffmpeg is not available, will use soundfile for audio conversion")
     
-    # Start the Flask app
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Run the app
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
