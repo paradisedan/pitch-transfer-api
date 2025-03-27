@@ -124,30 +124,32 @@ def transfer_pitch(source_file, target_file, output_file,
                   resynthesis_method="overlap-add", voicing_threshold=0.4,
                   octave_cost=0.01, octave_jump_cost=0.5, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
-    """Extract pitch from source_file and apply it to target_file."""
+    """
+    Transfer pitch from source audio to target audio.
+    
+    Args:
+        source_file: Path to source audio file
+        target_file: Path to target audio file
+        output_file: Path to output audio file
+        time_step: Time step for pitch analysis in seconds
+        min_pitch: Minimum pitch in Hz
+        max_pitch: Maximum pitch in Hz
+        resynthesis_method: Method for resynthesis (overlap-add, PSOLA, or LPC)
+        voicing_threshold: Threshold for voiced/unvoiced decision
+        octave_cost: Cost for octave jumps
+        octave_jump_cost: Cost for octave jumps
+        voiced_unvoiced_cost: Cost for voiced/unvoiced transitions
+        preserve_formants: Whether to preserve formants
+        
+    Returns:
+        Tuple of (success, message)
+    """
     source_wav = None
     target_wav = None
     
     try:
-        # Validate parameters
-        time_step = max(0.001, min(0.05, float(time_step)))  # Ensure time_step is within reasonable bounds
-        min_pitch = max(50, min(300, float(min_pitch)))      # Ensure min_pitch is within reasonable bounds
-        max_pitch = max(300, min(1000, float(max_pitch)))    # Ensure max_pitch is within reasonable bounds
-        voicing_threshold = max(0.1, min(0.9, float(voicing_threshold)))
-        octave_cost = max(0, min(0.1, float(octave_cost)))
-        octave_jump_cost = max(0.1, min(1.0, float(octave_jump_cost)))
-        voiced_unvoiced_cost = max(0.1, min(1.0, float(voiced_unvoiced_cost)))
-        
-        # Map resynthesis method to Praat command
-        resynthesis_methods = {
-            "overlap-add": "Get resynthesis (overlap-add)",
-            "straight": "Get resynthesis (STRAIGHT)",
-            "lpc": "Get resynthesis (LPC)"
-        }
-        resynthesis_command = resynthesis_methods.get(resynthesis_method.lower(), "Get resynthesis (overlap-add)")
-        
-        # Ensure source and target are different files
-        if os.path.samefile(source_file, target_file):
+        # Check if source and target are the same file
+        if os.path.abspath(source_file) == os.path.abspath(target_file):
             logger.error("Source and target files are the same")
             return False, "Source and target files are the same"
             
@@ -157,7 +159,7 @@ def transfer_pitch(source_file, target_file, output_file,
         
         logger.info(f"Processing files: source={source_wav}, target={target_wav}")
         
-        # Load sound files
+        # Load source and target sounds
         logger.info(f"Loading source sound from {source_wav}")
         source_sound = parselmouth.Sound(source_wav)
         logger.info(f"Source sound loaded: duration={source_sound.duration} seconds, sampling frequency={source_sound.sampling_frequency} Hz")
@@ -192,77 +194,31 @@ def transfer_pitch(source_file, target_file, output_file,
         logger.info(f"Creating manipulation object with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
         manipulation = call(target_sound, "To Manipulation", time_step, min_pitch, max_pitch)
         
-        # Extract pitch tier from source pitch
+        # Extract pitch tier from manipulation
         logger.info("Extracting pitch tier")
-        pitch_tier = call(source_pitch, "Down to PitchTier")
+        pitch_tier = call(manipulation, "Extract pitch tier")
         
-        # Replace pitch in manipulation object
+        # Replace pitch tier with source pitch
         logger.info("Replacing pitch tier")
-        call([pitch_tier, manipulation], "Replace pitch tier")
+        call([manipulation, source_pitch], "Replace pitch tier")
         
-        # If preserve_formants is True, try to maintain the original formants
-        if preserve_formants:
-            logger.info("Preserving formants using alternative methods")
-            try:
-                if resynthesis_method.lower() == "lpc":
-                    # LPC already preserves formants by design
-                    logger.info("Using LPC resynthesis which inherently preserves formants")
-                else:
-                    # Try different methods for formant preservation
-                    # Method 1: Extract formant structure from target for later use
-                    logger.info("Extracting formant structure from target audio")
-                    target_formant = call(target_sound, "To Formant (burg)", 0.01, 5, 5500, 0.025, 50)
-                    logger.info("Successfully extracted formant structure")
-            except Exception as e:
-                logger.warning(f"Failed to prepare formant analysis: {str(e)}")
+        # Determine resynthesis command based on method
+        if resynthesis_method.lower() == "psola":
+            resynthesis_command = "Get resynthesis (PSOLA)"
+        elif resynthesis_method.lower() == "lpc":
+            resynthesis_command = "Get resynthesis (LPC)"
+        else:  # Default to overlap-add
+            resynthesis_command = "Get resynthesis (overlap-add)"
         
         # Generate new sound with selected resynthesis method
         logger.info(f"Generating new sound using resynthesis method: {resynthesis_method}")
         try:
-            # If using LPC resynthesis and we want to preserve formants, use a special approach
-            if preserve_formants and resynthesis_method.lower() == "lpc":
-                logger.info("Using LPC resynthesis with formant preservation")
-                new_sound = call(manipulation, "Get resynthesis (LPC)")
-                logger.info(f"New sound generated with LPC: duration={new_sound.duration} seconds")
-            else:
-                new_sound = call(manipulation, resynthesis_command)
-                logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
-                
-                # Apply formant preservation if needed and not using LPC resynthesis
-                if preserve_formants and 'target_formant' in locals():
-                    try:
-                        logger.info("Applying formant-based correction")
-                        # Create a FormantGrid from the Formant object
-                        formant_grid = call(target_formant, "Down to FormantGrid")
-                        
-                        # Apply the formant correction using FormantGrid
-                        new_sound = call([new_sound, formant_grid], "Filter with one formant")
-                        logger.info("Successfully applied formant correction")
-                    except Exception as e:
-                        logger.warning(f"Failed to apply formant correction: {str(e)}")
-                        try:
-                            # Alternative approach: Use LPC resynthesis directly
-                            logger.info("Trying alternative formant preservation approach")
-                            # Create a new manipulation from the modified sound
-                            temp_manip = call(new_sound, "To Manipulation", time_step, min_pitch, max_pitch)
-                            # Use LPC resynthesis on this manipulation
-                            new_sound = call(temp_manip, "Get resynthesis (LPC)")
-                            logger.info("Successfully applied alternative formant preservation")
-                        except Exception as e2:
-                            logger.warning(f"Failed to apply alternative formant preservation: {str(e2)}")
+            new_sound = call(manipulation, resynthesis_command)
+            logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
         except Exception as e:
             logger.warning(f"Failed to use {resynthesis_method} method: {str(e)}. Falling back to overlap-add.")
             new_sound = call(manipulation, "Get resynthesis (overlap-add)")
             logger.info(f"New sound generated with fallback method: duration={new_sound.duration} seconds")
-            
-            # Try to apply LPC-based formant preservation to the fallback sound
-            if preserve_formants and 'target_formant' in locals():
-                try:
-                    logger.info("Applying LPC-based formant preservation to fallback sound")
-                    new_sound = call([new_sound, target_formant], "Filter")
-                    logger.info("Successfully preserved formants on fallback sound")
-                except Exception as e:
-                    logger.warning(f"Failed to apply LPC-based formant preservation to fallback sound: {str(e)}")
         
         # Make sure the output directory exists
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
