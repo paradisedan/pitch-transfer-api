@@ -204,36 +204,51 @@ def transfer_pitch(source_file, target_file, output_file,
         # Determine resynthesis command based on method
         if resynthesis_method.lower() == "psola":
             logger.info("Using PSOLA (pitch-synchronous overlap-add) resynthesis method")
+            
+            # Simplified PSOLA validation - check essential requirements
+            psola_compatible = True
+            psola_issues = []
+            
+            # Check 1: Mono sound
+            if target_sound.n_channels != 1:
+                psola_compatible = False
+                psola_issues.append("Sound must be mono")
+            
+            # Check 2: Time step is short enough
+            if time_step > 0.01:
+                psola_compatible = False
+                psola_issues.append(f"Time step too large: {time_step}")
+            
+            # Check 3: Quick pitch tier validation
             try:
-                # Extract pitch tier from manipulation
                 pitch_tier = call([manipulation], "Extract pitch tier")
-                
-                # Extract duration tier if needed (for timing adjustments)
-                try:
-                    duration_tier = call([manipulation], "Extract duration tier")
-                    has_duration = True
-                except Exception as e:
-                    logger.warning(f"Could not extract duration tier: {str(e)}")
-                    has_duration = False
-                
-                # Get the original sound from manipulation
-                original_sound = call([manipulation], "Extract original sound")
-                
-                # Apply PSOLA directly using To Sound (pitch-synchronous overlap-add)
-                if has_duration:
-                    logger.info("Applying PSOLA with both pitch and duration tiers")
-                    new_sound = call([original_sound, pitch_tier, duration_tier], 
-                                    "To Sound (pitch-synchronous overlap-add)")
-                else:
-                    logger.info("Applying PSOLA with pitch tier only")
-                    new_sound = call([original_sound, pitch_tier], 
-                                    "To Sound (pitch-synchronous overlap-add)")
-                
-                logger.info(f"New sound generated with PSOLA: duration={new_sound.duration} seconds")
+                points = call(pitch_tier, "Get number of points")
+                if points == 0:
+                    psola_compatible = False
+                    psola_issues.append("No pitch points detected")
             except Exception as e:
-                logger.warning(f"Failed to use PSOLA method: {str(e)}. Falling back to overlap-add.")
+                psola_compatible = False
+                psola_issues.append(f"Could not analyze pitch tier: {str(e)}")
+            
+            # Log PSOLA compatibility status
+            if psola_compatible:
+                logger.info("Sound meets requirements for PSOLA")
+            else:
+                logger.warning(f"Sound does not meet PSOLA requirements: {', '.join(psola_issues)}")
+            
+            # Simplified resynthesis selection
+            if psola_compatible:
+                try:
+                    new_sound = call(manipulation, "Get resynthesis (PSOLA)")
+                    logger.info(f"PSOLA successful: duration={new_sound.duration}s")
+                except Exception as e:
+                    logger.warning(f"PSOLA failed despite compatibility checks: {str(e)}")
+                    new_sound = call(manipulation, "Get resynthesis (overlap-add)")
+                    logger.info(f"Fallback to overlap-add: duration={new_sound.duration}s")
+            else:
+                logger.warning("Using overlap-add due to PSOLA compatibility issues")
                 new_sound = call(manipulation, "Get resynthesis (overlap-add)")
-                logger.info(f"New sound generated with fallback method: duration={new_sound.duration} seconds")
+                logger.info(f"Using overlap-add: duration={new_sound.duration}s")
         elif resynthesis_method.lower() == "lpc":
             resynthesis_command = "Get resynthesis (LPC)"
             new_sound = call(manipulation, resynthesis_command)
