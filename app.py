@@ -231,12 +231,27 @@ def save_sound_to_wav(sound, output_file):
     logger.error("All save methods failed")
     return False
 
-def transfer_pitch(source_file, target_file, output_file):
+def transfer_pitch(source_file, target_file, output_file, 
+                  time_step=0.005, min_pitch=75, max_pitch=600,
+                  resynthesis_method="straight"):
     """Extract pitch from source_file and apply it to target_file."""
     source_wav = None
     target_wav = None
     
     try:
+        # Validate parameters
+        time_step = max(0.001, min(0.05, float(time_step)))  # Ensure time_step is within reasonable bounds
+        min_pitch = max(50, min(300, float(min_pitch)))      # Ensure min_pitch is within reasonable bounds
+        max_pitch = max(300, min(1000, float(max_pitch)))    # Ensure max_pitch is within reasonable bounds
+        
+        # Map resynthesis method to Praat command
+        resynthesis_methods = {
+            "overlap-add": "Get resynthesis (overlap-add)",
+            "straight": "Get resynthesis (STRAIGHT)",
+            "lpc": "Get resynthesis (LPC)"
+        }
+        resynthesis_command = resynthesis_methods.get(resynthesis_method.lower(), "Get resynthesis (overlap-add)")
+        
         # Ensure source and target are different files
         if os.path.samefile(source_file, target_file):
             logger.error("Source and target files are the same")
@@ -257,14 +272,14 @@ def transfer_pitch(source_file, target_file, output_file):
         target_sound = parselmouth.Sound(target_wav)
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
-        # Extract pitch from source
-        logger.info("Extracting pitch from source")
-        source_pitch = source_sound.to_pitch()
+        # Extract pitch from source with specified parameters
+        logger.info(f"Extracting pitch from source with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
+        source_pitch = source_sound.to_pitch(time_step=time_step, pitch_floor=min_pitch, pitch_ceiling=max_pitch)
         logger.info(f"Source pitch extracted: {source_pitch}")
         
-        # Manipulate the target sound with the source pitch
-        logger.info("Creating manipulation object")
-        manipulation = call(target_sound, "To Manipulation", 0.01, 75, 600)
+        # Create manipulation object with specified parameters
+        logger.info(f"Creating manipulation object with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
+        manipulation = call(target_sound, "To Manipulation", time_step, min_pitch, max_pitch)
         
         # Extract pitch tier from source pitch
         logger.info("Extracting pitch tier")
@@ -274,10 +289,15 @@ def transfer_pitch(source_file, target_file, output_file):
         logger.info("Replacing pitch tier")
         call([pitch_tier, manipulation], "Replace pitch tier")
         
-        # Generate new sound
-        logger.info("Generating new sound")
-        new_sound = call(manipulation, "Get resynthesis (overlap-add)")
-        logger.info(f"New sound generated: duration={new_sound.duration} seconds, sampling frequency={new_sound.sampling_frequency} Hz")
+        # Generate new sound with selected resynthesis method
+        logger.info(f"Generating new sound using resynthesis method: {resynthesis_method}")
+        try:
+            new_sound = call(manipulation, resynthesis_command)
+            logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
+        except Exception as e:
+            logger.warning(f"Failed to use {resynthesis_method} method: {str(e)}. Falling back to overlap-add.")
+            new_sound = call(manipulation, "Get resynthesis (overlap-add)")
+            logger.info(f"New sound generated with fallback method: duration={new_sound.duration} seconds")
         
         # Make sure the output directory exists
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -346,7 +366,14 @@ def process_audio():
         source_file = request.files['source_audio']
         target_file = request.files['target_audio']
         
+        # Get parameters from request with defaults
+        time_step = float(request.form.get('time_step', 0.005))  # Default to 0.005 (half of original)
+        min_pitch = float(request.form.get('min_pitch', 75))
+        max_pitch = float(request.form.get('max_pitch', 600))
+        resynthesis_method = request.form.get('resynthesis_method', 'straight')  # Default to STRAIGHT
+        
         logger.info(f"Received files: source={source_file.filename} ({source_file.content_type}), target={target_file.filename} ({target_file.content_type})")
+        logger.info(f"Processing parameters: time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, resynthesis_method={resynthesis_method}")
         
         # Check if filenames are valid
         if source_file.filename == '' or target_file.filename == '':
@@ -384,9 +411,17 @@ def process_audio():
             logger.error("Uploaded files are empty")
             return jsonify({"error": "Uploaded files are empty"}), 400
         
-        # Process audio files
+        # Process audio files with new parameters
         logger.info(f"Starting pitch transfer process: source={source_path}, target={target_path}, output={output_path}")
-        success, message = transfer_pitch(source_path, target_path, output_path)
+        success, message = transfer_pitch(
+            source_path, 
+            target_path, 
+            output_path,
+            time_step=time_step,
+            min_pitch=min_pitch,
+            max_pitch=max_pitch,
+            resynthesis_method=resynthesis_method
+        )
         
         if not success:
             logger.error(f"Processing failed: {message}")
