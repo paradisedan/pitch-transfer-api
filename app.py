@@ -121,7 +121,7 @@ def safe_remove(file_path):
 
 def transfer_pitch(source_file, target_file, output_file, 
                   time_step=0.005, min_pitch=75, max_pitch=300,
-                  resynthesis_method="overlap-add", voicing_threshold=0.4,
+                  resynthesis_method="psola", voicing_threshold=0.4,
                   octave_cost=0.01, octave_jump_cost=0.5, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
     """
@@ -328,7 +328,7 @@ def process_audio():
         time_step = float(request.form.get('time_step', 0.005))  # Default to 0.005
         min_pitch = float(request.form.get('min_pitch', 75))
         max_pitch = float(request.form.get('max_pitch', 300))  # Default to 300
-        resynthesis_method = request.form.get('resynthesis_method', 'overlap-add')  # Default to overlap-add
+        resynthesis_method = request.form.get('resynthesis_method', 'psola')  # Default to psola
         voicing_threshold = float(request.form.get('voicing_threshold', 0.4))
         octave_cost = float(request.form.get('octave_cost', 0.01))
         octave_jump_cost = float(request.form.get('octave_jump_cost', 0.5))
