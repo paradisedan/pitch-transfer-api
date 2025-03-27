@@ -233,8 +233,8 @@ def save_sound_to_wav(sound, output_file):
 
 def transfer_pitch(source_file, target_file, output_file, 
                   time_step=0.005, min_pitch=75, max_pitch=600,
-                  resynthesis_method="straight", voicing_threshold=0.4, octave_cost=0.01,
-                  octave_jump_cost=0.5, voiced_unvoiced_cost=0.14,
+                  resynthesis_method="overlap-add", voicing_threshold=0.4,
+                  octave_cost=0.01, octave_jump_cost=0.5, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
     """Extract pitch from source_file and apply it to target_file."""
     source_wav = None
@@ -280,7 +280,7 @@ def transfer_pitch(source_file, target_file, output_file,
         
         # Extract pitch from source with specified parameters
         logger.info(f"Extracting pitch from source with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, voicing_threshold={voicing_threshold}")
-        source_pitch = source_sound.to_pitch(
+        source_pitch = source_sound.to_pitch_ac(
             time_step=time_step, 
             pitch_floor=min_pitch, 
             pitch_ceiling=max_pitch,
@@ -397,7 +397,7 @@ def process_audio():
         time_step = float(request.form.get('time_step', 0.005))  # Default to 0.005 (half of original)
         min_pitch = float(request.form.get('min_pitch', 75))
         max_pitch = float(request.form.get('max_pitch', 600))
-        resynthesis_method = request.form.get('resynthesis_method', 'straight')  # Default to STRAIGHT
+        resynthesis_method = request.form.get('resynthesis_method', 'overlap-add')  # Default to overlap-add
         voicing_threshold = float(request.form.get('voicing_threshold', 0.4))
         octave_cost = float(request.form.get('octave_cost', 0.01))
         octave_jump_cost = float(request.form.get('octave_jump_cost', 0.5))
