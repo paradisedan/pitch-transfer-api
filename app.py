@@ -170,21 +170,17 @@ def transfer_pitch(source_file, target_file, output_file,
         
         # Extract pitch from source with specified parameters
         logger.info(f"Extracting pitch from source with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, voicing_threshold={voicing_threshold}")
-        source_pitch = source_sound.to_pitch_ac(
+        source_pitch = source_sound.to_pitch(
             time_step=time_step, 
             pitch_floor=min_pitch, 
-            pitch_ceiling=max_pitch,
-            voicing_threshold=voicing_threshold,
-            octave_cost=octave_cost,
-            octave_jump_cost=octave_jump_cost,
-            voiced_unvoiced_cost=voiced_unvoiced_cost
+            pitch_ceiling=max_pitch
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
         # Smooth the pitch contour for better quality
         logger.info("Smoothing pitch contour")
         try:
-            smoothed_pitch = call(source_pitch, "Smooth...", 2)  # Bandwidth of 2 semitones
+            smoothed_pitch = source_pitch.smooth(bandwidth=2)  # Bandwidth of 2 semitones
             logger.info("Pitch contour smoothed successfully")
             source_pitch = smoothed_pitch
         except Exception as e:
