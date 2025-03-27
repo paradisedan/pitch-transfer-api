@@ -12,8 +12,8 @@ A Flask API that uses Parselmouth to transfer pitch from one audio file to anoth
     - `time_step`: Time step for pitch analysis in seconds (default: 0.005)
     - `min_pitch`: Minimum pitch in Hz (default: 75)
     - `max_pitch`: Maximum pitch in Hz (default: 600)
-    - `resynthesis_method`: Method for resynthesis (default: "straight")
-      - Options: "straight" (high quality), "overlap-add" (faster), "lpc" (preserves formants)
+    - `resynthesis_method`: Method for resynthesis (default: "overlap-add")
+      - Options: "overlap-add" (standard method), "lpc" (preserves formants), "straight" (if available)
     - `voicing_threshold`: Threshold for voiced/unvoiced decision (default: 0.4)
     - `octave_cost`: Cost for octave jumps in pitch analysis (default: 0.01)
     - `octave_jump_cost`: Cost for octave jumps between adjacent frames (default: 0.5)
@@ -24,7 +24,7 @@ A Flask API that uses Parselmouth to transfer pitch from one audio file to anoth
 
 - For speech-to-speech transfers with high quality (default settings): 
   - `time_step`: 0.005
-  - `resynthesis_method`: "straight"
+  - `resynthesis_method`: "overlap-add"
   - `voicing_threshold`: 0.4
   - `octave_jump_cost`: 0.5
   - `preserve_formants`: true
@@ -41,6 +41,29 @@ A Flask API that uses Parselmouth to transfer pitch from one audio file to anoth
 - For female voices:
   - `min_pitch`: 100
   - `max_pitch`: 500
+
+## Notes on Resynthesis Methods
+
+- **overlap-add**: Standard PSOLA method available in all Praat installations
+- **lpc**: Linear Predictive Coding, good for preserving formants
+- **straight**: Advanced method that may not be available in standard Praat installations. If specified but not available, the API will automatically fall back to overlap-add.
+
+## Quality Improvements
+
+The current implementation includes several features to improve the naturalness of speech-to-speech transfers:
+
+1. **Formant Preservation**: 
+   - Preserves the vocal characteristics of the target speaker
+   - Reduces "robotic" qualities in the output
+   - Maintains more natural timbre while changing pitch
+
+2. **Advanced Pitch Analysis**:
+   - `voicing_threshold`: Controls which parts of the signal are considered voiced (lower values = more voiced segments)
+   - `octave_cost`: Penalizes pitch candidates that are far from the median pitch (higher values = more stable pitch)
+   - `octave_jump_cost`: Penalizes large jumps in pitch between adjacent frames (higher values = smoother pitch contours)
+   - `voiced_unvoiced_cost`: Penalizes transitions between voiced and unvoiced segments (higher values = fewer transitions)
+
+## Troubleshooting
 
 - For fixing "robotic" sounding results:
   - `voicing_threshold`: 0.4 (lower for more voiced segments)
