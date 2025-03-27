@@ -47,189 +47,77 @@ def safe_remove(file_path):
     except Exception as e:
         logger.error(f"Error removing file {file_path}: {str(e)}")
 
-def convert_to_wav_with_ffmpeg(input_file, output_file):
-    """Use ffmpeg to convert audio to WAV format."""
+def is_valid_wav(file_path):
+    """Check if a file is a valid WAV file."""
     try:
-        logger.info(f"Converting {input_file} to WAV using ffmpeg")
-        # Use ffmpeg to convert to standard WAV format
-        cmd = [
-            'ffmpeg', '-y', 
-            '-i', input_file, 
-            '-acodec', 'pcm_s16le',  # 16-bit PCM
-            '-ar', '44100',          # 44.1kHz sample rate
-            '-ac', '1',              # Mono
-            output_file
-        ]
-        
-        # Run the ffmpeg command
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            logger.error(f"ffmpeg conversion failed: {result.stderr}")
-            raise Exception(f"ffmpeg conversion failed: {result.stderr}")
-        
-        # Verify the file was created successfully
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            logger.info(f"Successfully converted to WAV: {output_file} ({os.path.getsize(output_file)} bytes)")
-            return output_file
-        else:
-            logger.error(f"Failed to create WAV file at {output_file}")
-            raise Exception(f"Failed to create WAV file at {output_file}")
+        with wave.open(file_path, 'rb') as wf:
+            if wf.getnchannels() == 1 and wf.getsampwidth() == 2 and wf.getframerate() == 44100:
+                return True
     except Exception as e:
-        logger.error(f"Error converting file {input_file}: {str(e)}")
-        raise
-
-def convert_to_wav_with_soundfile(input_file, output_file):
-    """Convert audio to WAV format using soundfile."""
-    try:
-        logger.info(f"Converting {input_file} to WAV using soundfile")
-        # Load audio file
-        data, samplerate = sf.read(input_file)
-        
-        # Save as WAV with explicit format
-        sf.write(output_file, data, samplerate, subtype='PCM_16', format='WAV')
-        
-        # Verify the file was created successfully
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            logger.info(f"Successfully converted to WAV: {output_file} ({os.path.getsize(output_file)} bytes)")
-            return output_file
-        else:
-            logger.error(f"Failed to create WAV file at {output_file}")
-            raise Exception(f"Failed to create WAV file at {output_file}")
-    except Exception as e:
-        logger.error(f"Error converting file with soundfile {input_file}: {str(e)}")
-        raise
+        logger.error(f"Error checking WAV file {file_path}: {str(e)}")
+    return False
 
 def convert_to_wav(input_file, output_file=None):
-    """Convert audio to WAV format using multiple methods."""
-    if not output_file:
-        output_file = os.path.splitext(input_file)[0] + '.wav'
+    """Convert audio file to WAV format using ffmpeg or soundfile as fallback"""
+    if output_file is None:
+        output_file = f"/tmp/{os.path.splitext(os.path.basename(input_file))[0]}_{uuid.uuid4()}.wav"
     
-    # Try multiple methods to convert to WAV
+    # Check if the file is already a WAV file with the right format
+    if is_valid_wav(input_file):
+        logger.info(f"File {input_file} is already a valid WAV file")
+        return input_file, False
+    
+    # First try with ffmpeg if available
     try:
-        # First try with ffmpeg if available
-        try:
-            return convert_to_wav_with_ffmpeg(input_file, output_file)
-        except Exception as e:
-            logger.warning(f"ffmpeg conversion failed, trying soundfile: {str(e)}")
+        # Check if ffmpeg is available without running the full conversion
+        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True, timeout=1)
         
-        # If ffmpeg fails, try with soundfile
-        return convert_to_wav_with_soundfile(input_file, output_file)
-    except Exception as e:
-        logger.error(f"All conversion methods failed for {input_file}: {str(e)}")
-        raise
-
-def save_sound_to_wav_direct(sound, output_file):
-    """Save a Parselmouth Sound object to a WAV file using direct Parselmouth save."""
-    try:
-        # Save directly with Parselmouth
-        logger.info(f"Saving sound directly with Parselmouth to {output_file}")
-        sound.save(output_file, "WAV")
+        logger.info(f"Converting {input_file} to WAV using ffmpeg")
+        subprocess.run([
+            'ffmpeg', '-y', '-i', input_file, 
+            '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '1',
+            output_file
+        ], capture_output=True, check=True)
         
-        # Verify the file was created successfully
         if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            logger.info(f"Successfully saved WAV file: {output_file} ({os.path.getsize(output_file)} bytes)")
-            return True
+            logger.info(f"Successfully converted to WAV: {output_file} ({os.path.getsize(output_file)} bytes)")
+            return output_file, True
         else:
-            logger.error(f"Failed to create WAV file at {output_file}")
-            return False
+            logger.error(f"ffmpeg conversion failed to produce output file")
+            raise Exception("ffmpeg conversion failed to produce output file")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error converting file {input_file}: {e}")
+        logger.warning(f"ffmpeg conversion failed, trying soundfile: {e}")
+    except FileNotFoundError as e:
+        logger.warning(f"ffmpeg not found, using soundfile instead: {e}")
     except Exception as e:
-        logger.error(f"Error saving sound with Parselmouth: {str(e)}")
-        return False
-
-def save_sound_to_wav_wave(sound, output_file):
-    """Save a Parselmouth Sound object to a WAV file using the wave module."""
+        logger.error(f"Error converting file {input_file}: {e}")
+        logger.warning(f"ffmpeg conversion failed, trying soundfile: {e}")
+    
+    # Fallback to soundfile
     try:
-        # Get values and parameters from the Sound object
-        y = np.array(sound.values)
-        sample_rate = int(sound.sampling_frequency)
+        logger.info(f"Converting {input_file} to WAV using soundfile")
+        audio_data, sample_rate = sf.read(input_file)
+        sf.write(output_file, audio_data, sample_rate, subtype='PCM_16', format='WAV')
         
-        # Normalize the audio to 16-bit range
-        max_val = np.max(np.abs(y))
-        if max_val > 0:
-            y = y / max_val * 32767
-        
-        # Convert to 16-bit integers
-        y = y.astype(np.int16)
-        
-        # Create a wave file
-        with wave.open(output_file, 'wb') as wf:
-            wf.setnchannels(1)  # Mono
-            wf.setsampwidth(2)  # 2 bytes for 16-bit audio
-            wf.setframerate(sample_rate)
-            wf.writeframes(y.tobytes())
-        
-        # Verify the file was created successfully
         if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            logger.info(f"Successfully saved WAV file with wave module: {output_file} ({os.path.getsize(output_file)} bytes)")
-            return True
+            logger.info(f"Successfully converted to WAV: {output_file} ({os.path.getsize(output_file)} bytes)")
+            return output_file, True
         else:
-            logger.error(f"Failed to create WAV file at {output_file}")
-            return False
+            logger.error(f"soundfile conversion failed to produce output file")
+            raise Exception("soundfile conversion failed to produce output file")
     except Exception as e:
-        logger.error(f"Error saving sound with wave module: {str(e)}")
-        return False
+        logger.error(f"Error converting file with soundfile {input_file}: {e}")
+        raise Exception(f"Failed to convert audio file: {str(e)}")
 
-def save_sound_to_wav_soundfile(sound, output_file):
-    """Save a Parselmouth Sound object to a WAV file using soundfile."""
+def safe_remove(file_path):
+    """Safely remove a file if it exists."""
     try:
-        # Get values and parameters from the Sound object
-        y = np.array(sound.values)
-        sample_rate = int(sound.sampling_frequency)
-        
-        # Save using soundfile
-        sf.write(output_file, y, sample_rate, subtype='PCM_16', format='WAV')
-        
-        # Verify the file was created successfully
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            logger.info(f"Successfully saved WAV file with soundfile: {output_file} ({os.path.getsize(output_file)} bytes)")
-            return True
-        else:
-            logger.error(f"Failed to create WAV file at {output_file}")
-            return False
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"Removed file: {file_path}")
     except Exception as e:
-        logger.error(f"Error saving sound with soundfile: {str(e)}")
-        return False
-
-def save_sound_to_wav(sound, output_file):
-    """Save a Parselmouth Sound object to a WAV file using multiple methods."""
-    # Try multiple methods to save the sound
-    
-    # First try with direct Parselmouth save
-    if save_sound_to_wav_direct(sound, output_file):
-        return True
-    
-    logger.warning("Direct Parselmouth save failed, trying wave module")
-    
-    # If direct save fails, try with wave module
-    if save_sound_to_wav_wave(sound, output_file):
-        return True
-    
-    logger.warning("Wave module save failed, trying soundfile")
-    
-    # If wave module fails, try with soundfile
-    if save_sound_to_wav_soundfile(sound, output_file):
-        return True
-    
-    # If all methods fail, try saving to a temporary file and using ffmpeg
-    try:
-        logger.warning("All direct save methods failed, trying with temporary file and ffmpeg")
-        temp_file = os.path.join(os.path.dirname(output_file), f"temp_{uuid.uuid4()}.wav")
-        
-        # Try to save with any method to a temporary file
-        if (save_sound_to_wav_direct(sound, temp_file) or 
-            save_sound_to_wav_wave(sound, temp_file) or 
-            save_sound_to_wav_soundfile(sound, temp_file)):
-            
-            # If successful, use ffmpeg to convert to a standard format
-            convert_to_wav_with_ffmpeg(temp_file, output_file)
-            safe_remove(temp_file)
-            return True
-    except Exception as e:
-        logger.error(f"Temporary file and ffmpeg approach failed: {str(e)}")
-    
-    logger.error("All save methods failed")
-    return False
+        logger.error(f"Error removing file {file_path}: {str(e)}")
 
 def transfer_pitch(source_file, target_file, output_file, 
                   time_step=0.005, min_pitch=75, max_pitch=600,
@@ -264,8 +152,8 @@ def transfer_pitch(source_file, target_file, output_file,
             return False, "Source and target files are the same"
             
         # Convert to WAV if needed
-        source_wav = convert_to_wav(source_file, os.path.join(os.path.dirname(source_file), f"source_{uuid.uuid4()}.wav"))
-        target_wav = convert_to_wav(target_file, os.path.join(os.path.dirname(target_file), f"target_{uuid.uuid4()}.wav"))
+        source_wav, _ = convert_to_wav(source_file, os.path.join(os.path.dirname(source_file), f"source_{uuid.uuid4()}.wav"))
+        target_wav, _ = convert_to_wav(target_file, os.path.join(os.path.dirname(target_file), f"target_{uuid.uuid4()}.wav"))
         
         logger.info(f"Processing files: source={source_wav}, target={target_wav}")
         
@@ -557,10 +445,10 @@ if __name__ == '__main__':
     
     # Check if ffmpeg is available
     try:
-        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
-        logger.info("ffmpeg is available: " + result.stdout.split('\n')[0])
-    except Exception as e:
-        logger.warning(f"ffmpeg is not available: {str(e)}")
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True, timeout=2)
+        logger.info("ffmpeg is available for audio conversion")
+    except (subprocess.SubprocessError, FileNotFoundError):
+        logger.warning("ffmpeg is not available, will use soundfile for audio conversion")
     
-    # Run the app
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    # Start the Flask app
+    app.run(host='0.0.0.0', port=5000, debug=True)
