@@ -42,6 +42,11 @@ A Flask API that uses Parselmouth to transfer pitch from one audio file to anoth
   - `min_pitch`: 100
   - `max_pitch`: 500
 
+- For more detailed pitch analysis (slower processing): 
+  - `time_step`: 0.005
+  - `resynthesis_method`: "overlap-add"
+  - `preserve_formants`: true
+
 ## Notes on Resynthesis Methods
 
 - **overlap-add**: Standard PSOLA method available in all Praat installations
@@ -56,12 +61,19 @@ The current implementation includes several features to improve the naturalness 
    - Preserves the vocal characteristics of the target speaker
    - Reduces "robotic" qualities in the output
    - Maintains more natural timbre while changing pitch
+   - Now uses LPC-based filtering for better compatibility
 
 2. **Advanced Pitch Analysis**:
    - `voicing_threshold`: Controls which parts of the signal are considered voiced (lower values = more voiced segments)
    - `octave_cost`: Penalizes pitch candidates that are far from the median pitch (higher values = more stable pitch)
    - `octave_jump_cost`: Penalizes large jumps in pitch between adjacent frames (higher values = smoother pitch contours)
    - `voiced_unvoiced_cost`: Penalizes transitions between voiced and unvoiced segments (higher values = fewer transitions)
+
+3. **Pitch Smoothing**:
+   - Automatically smooths the extracted pitch contour
+   - Reduces jitter and unwanted pitch variations
+   - Creates more natural-sounding intonation patterns
+   - Helps eliminate artifacts in the output audio
 
 ## Troubleshooting
 

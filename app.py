@@ -291,6 +291,15 @@ def transfer_pitch(source_file, target_file, output_file,
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
+        # Smooth the pitch contour for better quality
+        logger.info("Smoothing pitch contour")
+        try:
+            smoothed_pitch = call(source_pitch, "Smooth...", 2)  # Bandwidth of 2 semitones
+            logger.info("Pitch contour smoothed successfully")
+            source_pitch = smoothed_pitch
+        except Exception as e:
+            logger.warning(f"Failed to smooth pitch contour: {str(e)}")
+        
         # Create manipulation object with specified parameters
         logger.info(f"Creating manipulation object with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
         manipulation = call(target_sound, "To Manipulation", time_step, min_pitch, max_pitch)
@@ -304,27 +313,48 @@ def transfer_pitch(source_file, target_file, output_file,
         call([pitch_tier, manipulation], "Replace pitch tier")
         
         # If preserve_formants is True, try to maintain the original formants
-        if preserve_formants and resynthesis_method.lower() != "lpc":
-            logger.info("Preserving formants by extracting and replacing formant structure")
+        if preserve_formants:
+            logger.info("Preserving formants using LPC analysis")
             try:
-                # Extract formant structure from target
-                target_formant = call(target_sound, "To Formant (burg)", 0.01, 5, 5500, 0.025, 50)
-                
-                # Replace formant structure in manipulation
-                call([target_formant, manipulation], "Replace formant tier")
-                logger.info("Successfully preserved formants")
+                if resynthesis_method.lower() == "lpc":
+                    # LPC already preserves formants by design
+                    logger.info("Using LPC resynthesis which inherently preserves formants")
+                else:
+                    # Extract LPC coefficients from target for later use
+                    logger.info("Extracting LPC coefficients from target audio")
+                    target_lpc = call(target_sound, "To LPC (autocorrelation)", 16, 0.025, 0.005, 50.0)
+                    logger.info("Successfully extracted LPC coefficients")
             except Exception as e:
-                logger.warning(f"Failed to preserve formants: {str(e)}")
+                logger.warning(f"Failed to prepare LPC analysis: {str(e)}")
         
         # Generate new sound with selected resynthesis method
         logger.info(f"Generating new sound using resynthesis method: {resynthesis_method}")
         try:
             new_sound = call(manipulation, resynthesis_command)
             logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
+            
+            # Apply LPC-based formant preservation if needed
+            if preserve_formants and resynthesis_method.lower() != "lpc" and 'target_lpc' in locals():
+                try:
+                    logger.info("Applying LPC-based formant preservation")
+                    # Apply the target formants using LPC filtering
+                    new_sound = call([new_sound, target_lpc], "Filter")
+                    logger.info("Successfully preserved formants using LPC filtering")
+                except Exception as e:
+                    logger.warning(f"Failed to apply LPC-based formant preservation: {str(e)}")
         except Exception as e:
             logger.warning(f"Failed to use {resynthesis_method} method: {str(e)}. Falling back to overlap-add.")
             new_sound = call(manipulation, "Get resynthesis (overlap-add)")
             logger.info(f"New sound generated with fallback method: duration={new_sound.duration} seconds")
+            
+            # Try to apply LPC-based formant preservation to the fallback sound
+            if preserve_formants and 'target_lpc' in locals():
+                try:
+                    logger.info("Applying LPC-based formant preservation to fallback sound")
+                    new_sound = call([new_sound, target_lpc], "Filter")
+                    logger.info("Successfully preserved formants on fallback sound")
+                except Exception as e:
+                    logger.warning(f"Failed to apply LPC-based formant preservation to fallback sound: {str(e)}")
         
         # Make sure the output directory exists
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -394,7 +424,7 @@ def process_audio():
         target_file = request.files['target_audio']
         
         # Get parameters from request with defaults
-        time_step = float(request.form.get('time_step', 0.005))  # Default to 0.005 (half of original)
+        time_step = float(request.form.get('time_step', 0.005))  # Default to 0.005
         min_pitch = float(request.form.get('min_pitch', 75))
         max_pitch = float(request.form.get('max_pitch', 600))
         resynthesis_method = request.form.get('resynthesis_method', 'overlap-add')  # Default to overlap-add
