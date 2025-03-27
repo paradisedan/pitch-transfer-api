@@ -121,7 +121,7 @@ def safe_remove(file_path):
 
 def transfer_pitch(source_file, target_file, output_file, 
                   time_step=0.005, min_pitch=75, max_pitch=300,
-                  resynthesis_method="overlap-add", voicing_threshold=0.4,
+                  resynthesis_method="psola", voicing_threshold=0.4,
                   octave_cost=0.01, octave_jump_cost=0.5, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
     """
@@ -170,21 +170,17 @@ def transfer_pitch(source_file, target_file, output_file,
         
         # Extract pitch from source with specified parameters
         logger.info(f"Extracting pitch from source with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, voicing_threshold={voicing_threshold}")
-        source_pitch = source_sound.to_pitch_ac(
+        source_pitch = source_sound.to_pitch(
             time_step=time_step, 
             pitch_floor=min_pitch, 
-            pitch_ceiling=max_pitch,
-            voicing_threshold=voicing_threshold,
-            octave_cost=octave_cost,
-            octave_jump_cost=octave_jump_cost,
-            voiced_unvoiced_cost=voiced_unvoiced_cost
+            pitch_ceiling=max_pitch
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
         # Smooth the pitch contour for better quality
         logger.info("Smoothing pitch contour")
         try:
-            smoothed_pitch = call(source_pitch, "Smooth...", 2)  # Bandwidth of 2 semitones
+            smoothed_pitch = source_pitch.smooth(bandwidth=2)  # Bandwidth of 2 semitones
             logger.info("Pitch contour smoothed successfully")
             source_pitch = smoothed_pitch
         except Exception as e:
@@ -328,7 +324,7 @@ def process_audio():
         time_step = float(request.form.get('time_step', 0.005))  # Default to 0.005
         min_pitch = float(request.form.get('min_pitch', 75))
         max_pitch = float(request.form.get('max_pitch', 300))  # Default to 300
-        resynthesis_method = request.form.get('resynthesis_method', 'overlap-add')  # Default to overlap-add
+        resynthesis_method = request.form.get('resynthesis_method', 'psola')  # Default to psola
         voicing_threshold = float(request.form.get('voicing_threshold', 0.4))
         octave_cost = float(request.form.get('octave_cost', 0.01))
         octave_jump_cost = float(request.form.get('octave_jump_cost', 0.5))
