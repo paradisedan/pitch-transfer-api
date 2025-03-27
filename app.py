@@ -120,7 +120,7 @@ def safe_remove(file_path):
         logger.error(f"Error removing file {file_path}: {str(e)}")
 
 def transfer_pitch(source_file, target_file, output_file, 
-                  time_step=0.005, min_pitch=75, max_pitch=600,
+                  time_step=0.005, min_pitch=75, max_pitch=300,
                   resynthesis_method="overlap-add", voicing_threshold=0.4,
                   octave_cost=0.01, octave_jump_cost=0.5, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
@@ -133,8 +133,8 @@ def transfer_pitch(source_file, target_file, output_file,
         output_file: Path to output audio file
         time_step: Time step for pitch analysis in seconds
         min_pitch: Minimum pitch in Hz
-        max_pitch: Maximum pitch in Hz
-        resynthesis_method: Method for resynthesis (overlap-add, PSOLA, or LPC)
+        max_pitch: Maximum pitch in Hz (default: 300)
+        resynthesis_method: Method for resynthesis (overlap-add, psola, or LPC)
         voicing_threshold: Threshold for voiced/unvoiced decision
         octave_cost: Cost for octave jumps
         octave_jump_cost: Cost for octave jumps
@@ -207,21 +207,45 @@ def transfer_pitch(source_file, target_file, output_file,
         
         # Determine resynthesis command based on method
         if resynthesis_method.lower() == "psola":
-            resynthesis_command = "Get resynthesis (PSOLA)"
+            logger.info("Using PSOLA (pitch-synchronous overlap-add) resynthesis method")
+            try:
+                # Extract pitch tier from manipulation
+                pitch_tier = call([manipulation], "Extract pitch tier")
+                
+                # Extract duration tier if needed (for timing adjustments)
+                try:
+                    duration_tier = call([manipulation], "Extract duration tier")
+                    has_duration = True
+                except Exception as e:
+                    logger.warning(f"Could not extract duration tier: {str(e)}")
+                    has_duration = False
+                
+                # Get the original sound from manipulation
+                original_sound = call([manipulation], "Extract original sound")
+                
+                # Apply PSOLA directly using To Sound (pitch-synchronous overlap-add)
+                if has_duration:
+                    logger.info("Applying PSOLA with both pitch and duration tiers")
+                    new_sound = call([original_sound, pitch_tier, duration_tier], 
+                                    "To Sound (pitch-synchronous overlap-add)")
+                else:
+                    logger.info("Applying PSOLA with pitch tier only")
+                    new_sound = call([original_sound, pitch_tier], 
+                                    "To Sound (pitch-synchronous overlap-add)")
+                
+                logger.info(f"New sound generated with PSOLA: duration={new_sound.duration} seconds")
+            except Exception as e:
+                logger.warning(f"Failed to use PSOLA method: {str(e)}. Falling back to overlap-add.")
+                new_sound = call(manipulation, "Get resynthesis (overlap-add)")
+                logger.info(f"New sound generated with fallback method: duration={new_sound.duration} seconds")
         elif resynthesis_method.lower() == "lpc":
             resynthesis_command = "Get resynthesis (LPC)"
-        else:  # Default to overlap-add
-            resynthesis_command = "Get resynthesis (overlap-add)"
-        
-        # Generate new sound with selected resynthesis method
-        logger.info(f"Generating new sound using resynthesis method: {resynthesis_method}")
-        try:
             new_sound = call(manipulation, resynthesis_command)
             logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
-        except Exception as e:
-            logger.warning(f"Failed to use {resynthesis_method} method: {str(e)}. Falling back to overlap-add.")
-            new_sound = call(manipulation, "Get resynthesis (overlap-add)")
-            logger.info(f"New sound generated with fallback method: duration={new_sound.duration} seconds")
+        else:  # Default to overlap-add
+            resynthesis_command = "Get resynthesis (overlap-add)"
+            new_sound = call(manipulation, resynthesis_command)
+            logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
         
         # Make sure the output directory exists
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -303,7 +327,7 @@ def process_audio():
         # Get parameters from request with defaults
         time_step = float(request.form.get('time_step', 0.005))  # Default to 0.005
         min_pitch = float(request.form.get('min_pitch', 75))
-        max_pitch = float(request.form.get('max_pitch', 600))
+        max_pitch = float(request.form.get('max_pitch', 300))  # Default to 300
         resynthesis_method = request.form.get('resynthesis_method', 'overlap-add')  # Default to overlap-add
         voicing_threshold = float(request.form.get('voicing_threshold', 0.4))
         octave_cost = float(request.form.get('octave_cost', 0.01))

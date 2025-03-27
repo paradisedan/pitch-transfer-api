@@ -11,20 +11,21 @@ A Flask API that uses Parselmouth to transfer pitch from one audio file to anoth
   - Accepts optional parameters:
     - `time_step`: Time step for pitch analysis in seconds (default: 0.005)
     - `min_pitch`: Minimum pitch in Hz (default: 75)
-    - `max_pitch`: Maximum pitch in Hz (default: 600)
+    - `max_pitch`: Maximum pitch in Hz (default: 300)
     - `resynthesis_method`: Method for resynthesis (default: "overlap-add")
-      - Options: "overlap-add" (standard method), "lpc" (preserves formants), "straight" (if available)
+      - Options: "overlap-add", "psola", "lpc"
     - `voicing_threshold`: Threshold for voiced/unvoiced decision (default: 0.4)
-    - `octave_cost`: Cost for octave jumps in pitch analysis (default: 0.01)
-    - `octave_jump_cost`: Cost for octave jumps between adjacent frames (default: 0.5)
+    - `octave_cost`: Cost for octave jumps (default: 0.01)
+    - `octave_jump_cost`: Cost for octave jumps (default: 0.5)
     - `voiced_unvoiced_cost`: Cost for voiced/unvoiced transitions (default: 0.14)
-    - `preserve_formants`: Whether to preserve the target's formant structure (default: true)
+    - `preserve_formants`: Whether to preserve formants (default: true)
 
 ## Recommended Settings
 
 - For speech-to-speech transfers with high quality (default settings): 
   - `time_step`: 0.005
-  - `resynthesis_method`: "overlap-add"
+  - `max_pitch`: 300
+  - `resynthesis_method`: "psola"
   - `voicing_threshold`: 0.4
   - `octave_jump_cost`: 0.5
   - `preserve_formants`: true
@@ -74,6 +75,12 @@ The current implementation includes several features to improve the naturalness 
    - Reduces jitter and unwanted pitch variations
    - Creates more natural-sounding intonation patterns
    - Helps eliminate artifacts in the output audio
+
+4. **PSOLA Resynthesis**:
+   - Uses Pitch-Synchronous Overlap-Add for high-quality pitch modification
+   - Preserves the spectral characteristics of the original sound
+   - Maintains better high-frequency content than other methods
+   - Creates more natural transitions between voiced and unvoiced segments
 
 ## Troubleshooting
 
