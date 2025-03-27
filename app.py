@@ -195,12 +195,15 @@ def transfer_pitch(source_file, target_file, output_file,
         manipulation = call(target_sound, "To Manipulation", time_step, min_pitch, max_pitch)
         
         # Extract pitch tier from manipulation
-        logger.info("Extracting pitch tier")
-        pitch_tier = call(manipulation, "Extract pitch tier")
+        logger.info("Extracting pitch tier from manipulation")
+        pitch_tier = call([manipulation], "Extract pitch tier")
         
         # Replace pitch tier with source pitch
-        logger.info("Replacing pitch tier")
-        call([manipulation, source_pitch], "Replace pitch tier")
+        logger.info("Creating pitch tier from source pitch")
+        source_pitch_tier = call([source_pitch], "Down to PitchTier")
+        
+        logger.info("Replacing pitch tier in manipulation")
+        call([manipulation, source_pitch_tier], "Replace pitch tier")
         
         # Determine resynthesis command based on method
         if resynthesis_method.lower() == "psola":
