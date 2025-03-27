@@ -267,16 +267,26 @@ def transfer_pitch(source_file, target_file, output_file,
         # Make sure the output directory exists
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
-        # Save the output using our multi-method approach
+        # Save the output
         logger.info(f"Saving output to {output_file}")
-        if not save_sound_to_wav(new_sound, output_file):
-            logger.error("All save methods failed")
-            return False, "Failed to save output file"
+        try:
+            # Save the sound directly with Parselmouth
+            new_sound.save(output_file, "WAV")
+            
+            # Verify the file was created successfully
+            if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+                logger.info(f"Successfully saved WAV file: {output_file} ({os.path.getsize(output_file)} bytes)")
+            else:
+                logger.error(f"Failed to create WAV file at {output_file}")
+                return False, "Failed to save output file"
+        except Exception as e:
+            logger.error(f"Error saving sound: {str(e)}")
+            return False, f"Error saving sound: {str(e)}"
         
         # Verify the file was created successfully
-        if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
-            logger.error(f"Failed to create output file at {output_file}")
-            return False, f"Failed to create output file at {output_file}"
+        if not os.path.exists(output_file):
+            logger.error(f"Output file does not exist: {output_file}")
+            return False, f"Output file was not created"
             
         logger.info(f"Successfully created output file: {output_file} ({os.path.getsize(output_file)} bytes)")
         
