@@ -233,7 +233,9 @@ def save_sound_to_wav(sound, output_file):
 
 def transfer_pitch(source_file, target_file, output_file, 
                   time_step=0.005, min_pitch=75, max_pitch=600,
-                  resynthesis_method="straight"):
+                  resynthesis_method="straight", voicing_threshold=0.4, octave_cost=0.01,
+                  octave_jump_cost=0.5, voiced_unvoiced_cost=0.14,
+                  preserve_formants=True):
     """Extract pitch from source_file and apply it to target_file."""
     source_wav = None
     target_wav = None
@@ -243,6 +245,10 @@ def transfer_pitch(source_file, target_file, output_file,
         time_step = max(0.001, min(0.05, float(time_step)))  # Ensure time_step is within reasonable bounds
         min_pitch = max(50, min(300, float(min_pitch)))      # Ensure min_pitch is within reasonable bounds
         max_pitch = max(300, min(1000, float(max_pitch)))    # Ensure max_pitch is within reasonable bounds
+        voicing_threshold = max(0.1, min(0.9, float(voicing_threshold)))
+        octave_cost = max(0, min(0.1, float(octave_cost)))
+        octave_jump_cost = max(0.1, min(1.0, float(octave_jump_cost)))
+        voiced_unvoiced_cost = max(0.1, min(1.0, float(voiced_unvoiced_cost)))
         
         # Map resynthesis method to Praat command
         resynthesis_methods = {
@@ -273,8 +279,16 @@ def transfer_pitch(source_file, target_file, output_file,
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
         # Extract pitch from source with specified parameters
-        logger.info(f"Extracting pitch from source with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
-        source_pitch = source_sound.to_pitch(time_step=time_step, pitch_floor=min_pitch, pitch_ceiling=max_pitch)
+        logger.info(f"Extracting pitch from source with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, voicing_threshold={voicing_threshold}")
+        source_pitch = source_sound.to_pitch(
+            time_step=time_step, 
+            pitch_floor=min_pitch, 
+            pitch_ceiling=max_pitch,
+            voicing_threshold=voicing_threshold,
+            octave_cost=octave_cost,
+            octave_jump_cost=octave_jump_cost,
+            voiced_unvoiced_cost=voiced_unvoiced_cost
+        )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
         # Create manipulation object with specified parameters
@@ -288,6 +302,19 @@ def transfer_pitch(source_file, target_file, output_file,
         # Replace pitch in manipulation object
         logger.info("Replacing pitch tier")
         call([pitch_tier, manipulation], "Replace pitch tier")
+        
+        # If preserve_formants is True, try to maintain the original formants
+        if preserve_formants and resynthesis_method.lower() != "lpc":
+            logger.info("Preserving formants by extracting and replacing formant structure")
+            try:
+                # Extract formant structure from target
+                target_formant = call(target_sound, "To Formant (burg)", 0.01, 5, 5500, 0.025, 50)
+                
+                # Replace formant structure in manipulation
+                call([target_formant, manipulation], "Replace formant tier")
+                logger.info("Successfully preserved formants")
+            except Exception as e:
+                logger.warning(f"Failed to preserve formants: {str(e)}")
         
         # Generate new sound with selected resynthesis method
         logger.info(f"Generating new sound using resynthesis method: {resynthesis_method}")
@@ -371,9 +398,14 @@ def process_audio():
         min_pitch = float(request.form.get('min_pitch', 75))
         max_pitch = float(request.form.get('max_pitch', 600))
         resynthesis_method = request.form.get('resynthesis_method', 'straight')  # Default to STRAIGHT
+        voicing_threshold = float(request.form.get('voicing_threshold', 0.4))
+        octave_cost = float(request.form.get('octave_cost', 0.01))
+        octave_jump_cost = float(request.form.get('octave_jump_cost', 0.5))
+        voiced_unvoiced_cost = float(request.form.get('voiced_unvoiced_cost', 0.14))
+        preserve_formants = request.form.get('preserve_formants', 'True').lower() == 'true'
         
         logger.info(f"Received files: source={source_file.filename} ({source_file.content_type}), target={target_file.filename} ({target_file.content_type})")
-        logger.info(f"Processing parameters: time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, resynthesis_method={resynthesis_method}")
+        logger.info(f"Processing parameters: time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, resynthesis_method={resynthesis_method}, voicing_threshold={voicing_threshold}, octave_cost={octave_cost}, octave_jump_cost={octave_jump_cost}, voiced_unvoiced_cost={voiced_unvoiced_cost}, preserve_formants={preserve_formants}")
         
         # Check if filenames are valid
         if source_file.filename == '' or target_file.filename == '':
@@ -420,7 +452,12 @@ def process_audio():
             time_step=time_step,
             min_pitch=min_pitch,
             max_pitch=max_pitch,
-            resynthesis_method=resynthesis_method
+            resynthesis_method=resynthesis_method,
+            voicing_threshold=voicing_threshold,
+            octave_cost=octave_cost,
+            octave_jump_cost=octave_jump_cost,
+            voiced_unvoiced_cost=voiced_unvoiced_cost,
+            preserve_formants=preserve_formants
         )
         
         if not success:
