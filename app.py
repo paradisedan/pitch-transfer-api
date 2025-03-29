@@ -134,7 +134,7 @@ def convert_to_wav_with_ffmpeg(input_file, output_file):
         raise Exception(f"Failed to fix WAV file: {str(e)}")
 
 def transfer_pitch(source_file, target_file, output_file, 
-                  time_step=0.0075, min_pitch=75, max_pitch=400,
+                  time_step=0.01, min_pitch=100, max_pitch=350,
                   resynthesis_method="psola", voicing_threshold=0.35,
                   octave_cost=0.015, octave_jump_cost=0.6, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
@@ -196,28 +196,22 @@ def transfer_pitch(source_file, target_file, output_file,
         target_sound = parselmouth.Sound(target_wav_path)
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
-        # --- Pitch Extraction using Autocorrelation (to_pitch) ---
-        logger.info("Extracting source pitch using autocorrelation (to_pitch)...")
-        # Note: to_pitch uses pitch_floor/pitch_ceiling, not min/max_pitch directly in call
-        source_pitch = source_sound.to_pitch(
-            time_step=time_step, 
-            pitch_floor=min_pitch, 
-            pitch_ceiling=max_pitch
-            # We are *not* passing the advanced parameters like voicing_threshold here,
-            # as to_pitch() doesn't directly accept them. Praat uses internal defaults 
-            # or settings from the GUI which parselmouth doesn't expose in this specific method.
-            # The advanced parameters WILL be used if we switch back to to_pitch_ac() or call Praat directly.
-        )
+        # --- Pitch Extraction using Autocorrelation (To Pitch (ac)) ---
+        logger.info("Extracting source pitch using autocorrelation with direct call (To Pitch (ac))...")
+        source_pitch = parselmouth.praat.call(source_sound, "To Pitch (ac)...", 
+            time_step, min_pitch, 5, True, 0.03, voicing_threshold, octave_cost, 
+            octave_jump_cost, voiced_unvoiced_cost, max_pitch)
         logger.info(f"Source pitch extracted: {source_pitch}")
         
-        # Smoothing removed - caused artifacts
-        # logger.info("Smoothing pitch contour (bandwidth=1.5)")
-        # try:
-        #     smoothed_pitch = source_pitch.smooth(bandwidth=1.5)  # Bandwidth of 1.5 semitones
-        #     logger.info("Pitch contour smoothed successfully")
-        #     source_pitch = smoothed_pitch
-        # except Exception as e:
-        #     logger.warning(f"Failed to smooth pitch contour: {str(e)}")
+        # Smooth the pitch contour
+        logger.info("Smoothing pitch contour (bandwidth=1.0)")
+        try:
+            smoothed_pitch = source_pitch.smooth(1.0)  # Bandwidth of 1.0 semitones
+            logger.info("Pitch contour smoothed successfully")
+            source_pitch = smoothed_pitch
+        except Exception as e:
+            logger.warning(f"Failed to smooth pitch contour: {str(e)}")
+            # Continue with unsmoothed pitch
         
         # Create manipulation object with specified parameters
         logger.info(f"Creating manipulation object with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
@@ -382,9 +376,9 @@ def process_audio():
         target_file = request.files['target_audio']
         
         # Get parameters from request with fine-tuned defaults
-        time_step = float(request.form.get('time_step', 0.0075))
-        min_pitch = float(request.form.get('min_pitch', 75))
-        max_pitch = float(request.form.get('max_pitch', 400))
+        time_step = float(request.form.get('time_step', 0.01))
+        min_pitch = float(request.form.get('min_pitch', 100))
+        max_pitch = float(request.form.get('max_pitch', 350))
         resynthesis_method = request.form.get('resynthesis_method', 'psola')
         voicing_threshold = float(request.form.get('voicing_threshold', 0.35))
         octave_cost = float(request.form.get('octave_cost', 0.015))
