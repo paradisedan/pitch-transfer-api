@@ -177,14 +177,14 @@ def transfer_pitch(source_file, target_file, output_file,
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
-        # Smoothing removed for this experiment
-        # logger.info("Smoothing pitch contour")
-        # try:
-        #     smoothed_pitch = source_pitch.smooth(bandwidth=2)  # Bandwidth of 2 semitones
-        #     logger.info("Pitch contour smoothed successfully")
-        #     source_pitch = smoothed_pitch
-        # except Exception as e:
-        #     logger.warning(f"Failed to smooth pitch contour: {str(e)}")
+        # Smooth the pitch contour for better quality
+        logger.info("Smoothing pitch contour (bandwidth=1.5)")
+        try:
+            smoothed_pitch = source_pitch.smooth(bandwidth=1.5)  # Bandwidth of 1.5 semitones
+            logger.info("Pitch contour smoothed successfully")
+            source_pitch = smoothed_pitch
+        except Exception as e:
+            logger.warning(f"Failed to smooth pitch contour: {str(e)}")
         
         # Create manipulation object with specified parameters
         logger.info(f"Creating manipulation object with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
