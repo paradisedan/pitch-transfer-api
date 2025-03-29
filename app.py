@@ -107,6 +107,32 @@ def is_valid_wav(file_path):
         logger.error(f"Error checking WAV file {file_path}: {str(e)}")
     return False
 
+def convert_to_wav_with_ffmpeg(input_file, output_file):
+    """
+    Convert audio file to WAV format using soundfile.
+    This is a specialized version used for fixing potentially corrupted WAV files.
+    
+    Args:
+        input_file (str): Path to the input audio file
+        output_file (str): Path to the output WAV file
+        
+    Raises:
+        Exception: If conversion fails
+    """
+    try:
+        logger.info(f"Converting/fixing {input_file} to {output_file} using soundfile")
+        data, samplerate = sf.read(input_file)
+        sf.write(output_file, data, samplerate, format='WAV', subtype='PCM_16')
+        
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            logger.info(f"Successfully fixed WAV file: {output_file} ({os.path.getsize(output_file)} bytes)")
+        else:
+            logger.error(f"Conversion failed to produce output file")
+            raise Exception("Conversion failed to produce output file")
+    except Exception as e:
+        logger.error(f"Error fixing WAV file {input_file}: {e}")
+        raise Exception(f"Failed to fix WAV file: {str(e)}")
+
 def transfer_pitch(source_file, target_file, output_file, 
                   time_step=0.0075, min_pitch=75, max_pitch=400,
                   resynthesis_method="psola", voicing_threshold=0.35,
