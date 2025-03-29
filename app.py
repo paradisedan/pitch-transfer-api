@@ -168,23 +168,30 @@ def transfer_pitch(source_file, target_file, output_file,
         target_sound = parselmouth.Sound(target_wav)
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
-        # Extract pitch from source with specified parameters
-        logger.info(f"Extracting pitch from source with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
-        source_pitch = source_sound.to_pitch(
-            time_step=time_step, 
-            pitch_floor=min_pitch, 
-            pitch_ceiling=max_pitch
+        # Extract pitch from source sound using cross-correlation
+        logger.info("Extracting source pitch using cross-correlation (cc)...")
+        source_pitch = call(
+            source_sound, 
+            "To Pitch (cc)...", 
+            time_step, 
+            min_pitch, 
+            15,  # frames_per_period (default)
+            max_pitch, 
+            voicing_threshold, 
+            octave_cost, 
+            octave_jump_cost, 
+            voiced_unvoiced_cost
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
-        # Smooth the pitch contour for better quality
-        logger.info("Smoothing pitch contour (bandwidth=1.5)")
-        try:
-            smoothed_pitch = source_pitch.smooth(bandwidth=1.5)  # Bandwidth of 1.5 semitones
-            logger.info("Pitch contour smoothed successfully")
-            source_pitch = smoothed_pitch
-        except Exception as e:
-            logger.warning(f"Failed to smooth pitch contour: {str(e)}")
+        # Smoothing removed - caused artifacts
+        # logger.info("Smoothing pitch contour (bandwidth=1.5)")
+        # try:
+        #     smoothed_pitch = source_pitch.smooth(bandwidth=1.5)  # Bandwidth of 1.5 semitones
+        #     logger.info("Pitch contour smoothed successfully")
+        #     source_pitch = smoothed_pitch
+        # except Exception as e:
+        #     logger.warning(f"Failed to smooth pitch contour: {str(e)}")
         
         # Create manipulation object with specified parameters
         logger.info(f"Creating manipulation object with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
