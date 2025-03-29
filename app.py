@@ -120,46 +120,61 @@ def safe_remove(file_path):
         logger.error(f"Error removing file {file_path}: {str(e)}")
 
 def transfer_pitch(source_file, target_file, output_file, 
-                  time_step=0.01, min_pitch=75, max_pitch=600,
-                  resynthesis_method="psola", voicing_threshold=0.3,
-                  octave_cost=0.01, octave_jump_cost=0.5, voiced_unvoiced_cost=0.14,
+                  time_step=0.0075, min_pitch=75, max_pitch=400,
+                  resynthesis_method="psola", voicing_threshold=0.35,
+                  octave_cost=0.015, octave_jump_cost=0.6, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
     """
-    Transfer pitch from source audio to target audio.
+    Transfer pitch from source audio file to target audio file.
     
-    Args:
-        source_file: Path to source audio file
-        target_file: Path to target audio file
-        output_file: Path to output audio file
-        time_step: Time step for pitch analysis in seconds
-        min_pitch: Minimum pitch in Hz
-        max_pitch: Maximum pitch in Hz (default: 300)
-        resynthesis_method: Method for resynthesis (overlap-add, psola, or LPC)
-        voicing_threshold: Threshold for voiced/unvoiced decision
-        octave_cost: Cost for octave jumps
-        octave_jump_cost: Cost for octave jumps
-        voiced_unvoiced_cost: Cost for voiced/unvoiced transitions
-        preserve_formants: Whether to preserve formants
+    Parameters:
+    -----------
+    source_file : str
+        Path to source audio file (the file with the desired pitch contour)
+    target_file : str
+        Path to target audio file (the file to be modified)
+    output_file : str
+        Path to output audio file
+    time_step : float, optional
+        Time step for pitch analysis (smaller values = more precise but slower)
+    min_pitch : float, optional
+        Minimum pitch in Hz
+    max_pitch : float, optional
+        Maximum pitch in Hz
+    resynthesis_method : str, optional
+        Method for resynthesis, one of "psola", "overlap-add", or "lpc"
+    voicing_threshold : float, optional
+        Threshold for voiced/unvoiced decision (higher = more conservative)
+    octave_cost : float, optional
+        Cost for octave jumps (higher = more stable pitch tracking)
+    octave_jump_cost : float, optional
+        Cost for octave jumps (higher = smoother pitch contour)
+    voiced_unvoiced_cost : float, optional
+        Cost for voiced/unvoiced transitions
+    preserve_formants : bool, optional
+        Whether to preserve formants of the target sound
         
     Returns:
-        Tuple of (success, message)
+    --------
+    str
+        Path to output audio file
     """
     source_wav = None
     target_wav = None
-    
+    output_path = None
+    temp_files = []
+
     try:
-        # Check if source and target are the same file
-        if os.path.abspath(source_file) == os.path.abspath(target_file):
-            logger.error("Source and target files are the same")
-            return False, "Source and target files are the same"
-            
-        # Convert to WAV if needed
-        source_wav, _ = convert_to_wav(source_file, os.path.join(os.path.dirname(source_file), f"source_{uuid.uuid4()}.wav"))
-        target_wav, _ = convert_to_wav(target_file, os.path.join(os.path.dirname(target_file), f"target_{uuid.uuid4()}.wav"))
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        
+        # Convert files to WAV if necessary
+        source_wav, source_temp = convert_to_wav(source_file, "source", temp_files)
+        target_wav, target_temp = convert_to_wav(target_file, "target", temp_files)
         
         logger.info(f"Processing files: source={source_wav}, target={target_wav}")
-        
-        # Load source and target sounds
+
+        # Load sounds
         logger.info(f"Loading source sound from {source_wav}")
         source_sound = parselmouth.Sound(source_wav)
         logger.info(f"Source sound loaded: duration={source_sound.duration} seconds, sampling frequency={source_sound.sampling_frequency} Hz")
@@ -168,16 +183,17 @@ def transfer_pitch(source_file, target_file, output_file,
         target_sound = parselmouth.Sound(target_wav)
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
-        # Extract pitch from source sound using cross-correlation
-        logger.info("Extracting source pitch using cross-correlation (to_pitch_cc)...")
-        source_pitch = source_sound.to_pitch_cc(
+        # --- Pitch Extraction using Autocorrelation (to_pitch) ---
+        logger.info("Extracting source pitch using autocorrelation (to_pitch)...")
+        # Note: to_pitch uses pitch_floor/pitch_ceiling, not min/max_pitch directly in call
+        source_pitch = source_sound.to_pitch(
             time_step=time_step, 
             pitch_floor=min_pitch, 
-            pitch_ceiling=max_pitch,
-            voicing_threshold=voicing_threshold,
-            octave_cost=octave_cost,
-            octave_jump_cost=octave_jump_cost,
-            voiced_unvoiced_cost=voiced_unvoiced_cost
+            pitch_ceiling=max_pitch
+            # We are *not* passing the advanced parameters like voicing_threshold here,
+            # as to_pitch() doesn't directly accept them. Praat uses internal defaults 
+            # or settings from the GUI which parselmouth doesn't expose in this specific method.
+            # The advanced parameters WILL be used if we switch back to to_pitch_ac() or call Praat directly.
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
@@ -340,48 +356,31 @@ def transfer_pitch(source_file, target_file, output_file,
 def health_check():
     return jsonify({"status": "healthy"})
 
-@app.route('/process', methods=['POST'])
-def process_audio():
-    source_path = None
-    target_path = None
-    output_path = None
-    temp_files = []
-    
+@app.route('/transfer-pitch', methods=['POST'])
+def handle_pitch_transfer():
+    logger.info("Received pitch transfer request")
+    if 'source_audio' not in request.files or 'target_audio' not in request.files:
+        return jsonify({"error": "Missing source_audio or target_audio file"}), 400
+
     try:
-        logger.info("Received pitch transfer request")
-        
-        # Check if files exist in request
-        if 'source_audio' not in request.files or 'target_audio' not in request.files:
-            logger.error("Missing source_audio or target_audio in request")
-            return jsonify({"error": "Missing source_audio or target_audio file"}), 400
-        
         source_file = request.files['source_audio']
         target_file = request.files['target_audio']
         
-        # Get parameters from request with defaults
-        time_step = float(request.form.get('time_step', 0.01))  # Default to 0.01
+        # Get parameters from request with fine-tuned defaults
+        time_step = float(request.form.get('time_step', 0.0075))
         min_pitch = float(request.form.get('min_pitch', 75))
-        max_pitch = float(request.form.get('max_pitch', 600))  # Default to 600
-        resynthesis_method = request.form.get('resynthesis_method', 'psola')  # Default to psola
-        voicing_threshold = float(request.form.get('voicing_threshold', 0.3))
-        octave_cost = float(request.form.get('octave_cost', 0.01))
-        octave_jump_cost = float(request.form.get('octave_jump_cost', 0.5))
+        max_pitch = float(request.form.get('max_pitch', 400))
+        resynthesis_method = request.form.get('resynthesis_method', 'psola')
+        voicing_threshold = float(request.form.get('voicing_threshold', 0.35))
+        octave_cost = float(request.form.get('octave_cost', 0.015))
+        octave_jump_cost = float(request.form.get('octave_jump_cost', 0.6))
         voiced_unvoiced_cost = float(request.form.get('voiced_unvoiced_cost', 0.14))
         preserve_formants = request.form.get('preserve_formants', 'True').lower() == 'true'
         
-        logger.info(f"Received files: source={source_file.filename} ({source_file.content_type}), target={target_file.filename} ({target_file.content_type})")
+        # Log received files and parameters
+        logger.info(f"Received files: source={source_file.filename} ({source_file.mimetype}), target={target_file.filename} ({target_file.mimetype})")
         logger.info(f"Processing parameters: time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, resynthesis_method={resynthesis_method}, voicing_threshold={voicing_threshold}, octave_cost={octave_cost}, octave_jump_cost={octave_jump_cost}, voiced_unvoiced_cost={voiced_unvoiced_cost}, preserve_formants={preserve_formants}")
-        
-        # Check if filenames are valid
-        if source_file.filename == '' or target_file.filename == '':
-            logger.error("Empty filename provided")
-            return jsonify({"error": "No selected file"}), 400
-        
-        # Check file extensions
-        if not (allowed_file(source_file.filename) and allowed_file(target_file.filename)):
-            logger.error(f"Invalid file types: source={source_file.filename}, target={target_file.filename}")
-            return jsonify({"error": "File type not allowed"}), 400
-        
+
         # Create unique filenames with different UUIDs
         source_filename = f"{uuid.uuid4()}_source_{secure_filename(source_file.filename)}"
         target_filename = f"{uuid.uuid4()}_target_{secure_filename(target_file.filename)}"
@@ -392,7 +391,7 @@ def process_audio():
         target_path = os.path.join(app.config['UPLOAD_FOLDER'], target_filename)
         output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
         
-        temp_files.extend([source_path, target_path, output_path])
+        temp_files = [source_path, target_path, output_path]
         
         source_file.save(source_path)
         target_file.save(target_path)
@@ -460,7 +459,7 @@ def process_audio():
                         mimetype="audio/wav")
         
     except Exception as e:
-        logger.error(f"Error in process_audio: {str(e)}")
+        logger.error(f"Error in handle_pitch_transfer: {str(e)}")
         # Clean up files in case of error
         for file_path in temp_files:
             safe_remove(file_path)
