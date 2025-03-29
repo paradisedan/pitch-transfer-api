@@ -169,20 +169,15 @@ def transfer_pitch(source_file, target_file, output_file,
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
         # Extract pitch from source sound using cross-correlation
-        logger.info("Extracting source pitch using cross-correlation (cc)...")
-        source_pitch = call(
-            source_sound, 
-            "To Pitch (cc)...", 
-            time_step,            # 1. Time step (s)
-            min_pitch,            # 2. Pitch floor (Hz)
-            15,                   # 3. Max number of candidates
-            # 4. Very accurate ('yes'/'no') - omitted for default 'no'
-            0.03,                 # 5. Silence threshold (Praat default)
-            voicing_threshold,    # 6. Voicing threshold
-            octave_cost,          # 7. Octave cost
-            octave_jump_cost,     # 8. Octave-jump cost
-            voiced_unvoiced_cost, # 9. Voiced/unvoiced cost
-            max_pitch             # 10. Pitch ceiling (Hz)
+        logger.info("Extracting source pitch using cross-correlation (to_pitch_cc)...")
+        source_pitch = source_sound.to_pitch_cc(
+            time_step=time_step, 
+            pitch_floor=min_pitch, 
+            pitch_ceiling=max_pitch,
+            voicing_threshold=voicing_threshold,
+            octave_cost=octave_cost,
+            octave_jump_cost=octave_jump_cost,
+            voiced_unvoiced_cost=voiced_unvoiced_cost
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
