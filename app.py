@@ -201,63 +201,68 @@ def transfer_pitch(source_file, target_file, output_file,
         logger.info("Replacing pitch tier in manipulation")
         call([manipulation, source_pitch_tier], "Replace pitch tier")
         
-        # Determine resynthesis command based on method
-        if resynthesis_method.lower() == "psola":
-            logger.info("Using PSOLA (pitch-synchronous overlap-add) resynthesis method")
-            
-            # Simplified PSOLA validation - check essential requirements
-            psola_compatible = True
-            psola_issues = []
-            
-            # Check 1: Mono sound
-            if target_sound.n_channels != 1:
-                psola_compatible = False
-                psola_issues.append("Sound must be mono")
-            
-            # Check 2: Time step is short enough
-            if time_step > 0.01:
-                psola_compatible = False
-                psola_issues.append(f"Time step too large: {time_step}")
-            
-            # Check 3: Quick pitch tier validation
-            try:
-                pitch_tier = call([manipulation], "Extract pitch tier")
-                points = call(pitch_tier, "Get number of points")
-                if points == 0:
-                    psola_compatible = False
-                    psola_issues.append("No pitch points detected")
-            except Exception as e:
-                psola_compatible = False
-                psola_issues.append(f"Could not analyze pitch tier: {str(e)}")
-            
-            # Log PSOLA compatibility status
-            if psola_compatible:
-                logger.info("Sound meets requirements for PSOLA")
-            else:
-                logger.warning(f"Sound does not meet PSOLA requirements: {', '.join(psola_issues)}")
-            
-            # Simplified resynthesis selection
-            if psola_compatible:
-                try:
-                    new_sound = call(manipulation, "Get resynthesis (PSOLA)")
-                    logger.info(f"PSOLA successful: duration={new_sound.duration}s")
-                except Exception as e:
-                    logger.warning(f"PSOLA failed despite compatibility checks: {str(e)}")
-                    new_sound = call(manipulation, "Get resynthesis (overlap-add)")
-                    logger.info(f"Fallback to overlap-add: duration={new_sound.duration}s")
-            else:
-                logger.warning("Using overlap-add due to PSOLA compatibility issues")
-                new_sound = call(manipulation, "Get resynthesis (overlap-add)")
-                logger.info(f"Using overlap-add: duration={new_sound.duration}s")
-        elif resynthesis_method.lower() == "lpc":
-            resynthesis_command = "Get resynthesis (LPC)"
-            new_sound = call(manipulation, resynthesis_command)
-            logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
-        else:  # Default to overlap-add
-            resynthesis_command = "Get resynthesis (overlap-add)"
-            new_sound = call(manipulation, resynthesis_command)
-            logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
+        # Choose resynthesis method
+        logger.info("Generating new sound using forced overlap-add for testing")
+        new_sound = call(manipulation, "Get resynthesis (overlap-add)")
+        logger.info(f"New sound generated with overlap-add: duration={new_sound.duration} seconds")
         
+        # --- Original PSOLA / LPC Logic (Commented out for testing) ---
+        # if resynthesis_method.lower() == "psola":
+        #     # PSOLA Compatibility Checks and Resynthesis
+        #     logger.info("Checking PSOLA compatibility")
+        #     psola_compatible = True
+        #     psola_issues = []
+
+        #     # Check 1: Mono sound
+        #     if target_sound.n_channels != 1:
+        #         psola_compatible = False
+        #         psola_issues.append("Sound must be mono")
+            
+        #     # Check 2: Time step is short enough
+        #     if time_step > 0.01:
+        #         psola_compatible = False
+        #         psola_issues.append(f"Time step too large: {time_step}")
+            
+        #     # Check 3: Quick pitch tier validation
+        #     try:
+        #         pitch_tier_check = call([manipulation], "Extract pitch tier") # Re-extract for check
+        #         points = call(pitch_tier_check, "Get number of points")
+        #         if points == 0:
+        #             psola_compatible = False
+        #             psola_issues.append("No pitch points detected")
+        #     except Exception as e:
+        #         psola_compatible = False
+        #         psola_issues.append(f"Could not analyze pitch tier: {str(e)}")
+            
+        #     # Log PSOLA compatibility status
+        #     if psola_compatible:
+        #         logger.info("Sound meets requirements for PSOLA")
+        #     else:
+        #         logger.warning(f"Sound does not meet PSOLA requirements: {', '.join(psola_issues)}")
+            
+        #     # Simplified resynthesis selection
+        #     if psola_compatible:
+        #         try:
+        #             new_sound = call(manipulation, "Get resynthesis (PSOLA)")
+        #             logger.info(f"PSOLA successful: duration={new_sound.duration}s")
+        #         except Exception as e:
+        #             logger.warning(f"PSOLA failed despite compatibility checks: {str(e)}")
+        #             new_sound = call(manipulation, "Get resynthesis (overlap-add)")
+        #             logger.info(f"Fallback to overlap-add: duration={new_sound.duration}s")
+        #     else:
+        #         logger.warning("Using overlap-add due to PSOLA compatibility issues")
+        #         new_sound = call(manipulation, "Get resynthesis (overlap-add)")
+        #         logger.info(f"Using overlap-add: duration={new_sound.duration}s")
+        # elif resynthesis_method.lower() == "lpc":
+        #     resynthesis_command = "Get resynthesis (LPC)"
+        #     new_sound = call(manipulation, resynthesis_command)
+        #     logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
+        # else:  # Default to overlap-add
+        #     resynthesis_command = "Get resynthesis (overlap-add)"
+        #     new_sound = call(manipulation, resynthesis_command)
+        #     logger.info(f"New sound generated with {resynthesis_method}: duration={new_sound.duration} seconds")
+        # --- End Original Logic ---
+
         # Make sure the output directory exists
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
