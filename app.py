@@ -135,9 +135,9 @@ def convert_to_wav_with_ffmpeg(input_file, output_file):
         raise Exception(f"Failed to fix WAV file: {str(e)}")
 
 def transfer_pitch(source_file, target_file, output_file, 
-                  time_step=0.01, min_pitch=100, max_pitch=350,
-                  resynthesis_method="psola", voicing_threshold=0.35,
-                  octave_cost=0.015, octave_jump_cost=0.6, voiced_unvoiced_cost=0.14,
+                  time_step=0.0, min_pitch=75, max_pitch=500,
+                  resynthesis_method="psola", voicing_threshold=0.45,
+                  octave_cost=0.01, octave_jump_cost=0.35, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
     """
     Transfer pitch from source audio file to target audio file.
@@ -197,22 +197,19 @@ def transfer_pitch(source_file, target_file, output_file,
         target_sound = parselmouth.Sound(target_wav_path)
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
-        # --- Pitch Extraction using Autocorrelation (To Pitch (ac)) ---
-        logger.info("Extracting source pitch using autocorrelation with direct call (To Pitch (ac))...")
-        source_pitch = parselmouth.praat.call(source_sound, "To Pitch (ac)...", 
-            time_step, min_pitch, 5, True, 0.03, voicing_threshold, octave_cost, 
-            octave_jump_cost, voiced_unvoiced_cost, max_pitch)
-        logger.info(f"Source pitch extracted: {source_pitch}")
-        
-        # Smooth the pitch contour
-        logger.info("Smoothing pitch contour (bandwidth=1.0)")
-        try:
-            smoothed_pitch = source_pitch.smooth(1.0)  # Bandwidth of 1.0 semitones
-            logger.info("Pitch contour smoothed successfully")
-            source_pitch = smoothed_pitch
-        except Exception as e:
-            logger.warning(f"Failed to smooth pitch contour: {str(e)}")
-            # Continue with unsmoothed pitch
+        # Extract pitch using Praat's defaults for broader applicability
+        # time_step=0.0 lets Praat determine the optimal step
+        pitch = parselmouth.praat.call(source_sound, "To Pitch (ac)...", 
+                                     time_step,         # Let Praat decide (usually ~0.01)
+                                     min_pitch,         # 75 Hz default
+                                     15,                # Silence threshold (Praat default)
+                                     voicing_threshold, # 0.45 default
+                                     0.03,              # Voicing pulse (Praat default)
+                                     0.45,              # Voicing slope (Praat default)
+                                     octave_cost,       # 0.01 default
+                                     octave_jump_cost,  # 0.35 default
+                                     voiced_unvoiced_cost,# 0.14 default
+                                     max_pitch)         # 500 Hz default
         
         # Create manipulation object with specified parameters
         logger.info(f"Creating manipulation object with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
@@ -224,7 +221,7 @@ def transfer_pitch(source_file, target_file, output_file,
         
         # Replace pitch tier with source pitch
         logger.info("Creating pitch tier from source pitch")
-        source_pitch_tier = call([source_pitch], "Down to PitchTier")
+        source_pitch_tier = call([pitch], "Down to PitchTier")
         
         logger.info("Replacing pitch tier in manipulation")
         call([manipulation, source_pitch_tier], "Replace pitch tier")
@@ -376,14 +373,14 @@ def process_audio():
         source_file = request.files['source_audio']
         target_file = request.files['target_audio']
         
-        # Get parameters from request with fine-tuned defaults
-        time_step = float(request.form.get('time_step', 0.01))
-        min_pitch = float(request.form.get('min_pitch', 100))
-        max_pitch = float(request.form.get('max_pitch', 350))
+        # Get parameters from request with standard Praat defaults
+        time_step = float(request.form.get('time_step', 0.0))
+        min_pitch = float(request.form.get('min_pitch', 75))
+        max_pitch = float(request.form.get('max_pitch', 500))
         resynthesis_method = request.form.get('resynthesis_method', 'psola')
-        voicing_threshold = float(request.form.get('voicing_threshold', 0.35))
-        octave_cost = float(request.form.get('octave_cost', 0.015))
-        octave_jump_cost = float(request.form.get('octave_jump_cost', 0.6))
+        voicing_threshold = float(request.form.get('voicing_threshold', 0.45))
+        octave_cost = float(request.form.get('octave_cost', 0.01))
+        octave_jump_cost = float(request.form.get('octave_jump_cost', 0.35))
         voiced_unvoiced_cost = float(request.form.get('voiced_unvoiced_cost', 0.14))
         preserve_formants = request.form.get('preserve_formants', 'True').lower() == 'true'
         
