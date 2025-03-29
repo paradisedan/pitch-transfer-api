@@ -169,15 +169,11 @@ def transfer_pitch(source_file, target_file, output_file,
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
         # Extract pitch from source with specified parameters
-        logger.info(f"Extracting pitch from source with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, voicing_threshold={voicing_threshold}")
-        source_pitch = source_sound.to_pitch_ac(
+        logger.info(f"Extracting pitch from source with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
+        source_pitch = source_sound.to_pitch(
             time_step=time_step, 
             pitch_floor=min_pitch, 
-            pitch_ceiling=max_pitch,
-            voicing_threshold=voicing_threshold,
-            octave_cost=octave_cost,
-            octave_jump_cost=octave_jump_cost,
-            voiced_unvoiced_cost=voiced_unvoiced_cost
+            pitch_ceiling=max_pitch
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
