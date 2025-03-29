@@ -356,12 +356,13 @@ def transfer_pitch(source_file, target_file, output_file,
 def health_check():
     return jsonify({"status": "healthy"})
 
-@app.route('/transfer-pitch', methods=['POST'])
-def handle_pitch_transfer():
+@app.route('/process', methods=['POST'])
+def process_audio():
     logger.info("Received pitch transfer request")
     if 'source_audio' not in request.files or 'target_audio' not in request.files:
         return jsonify({"error": "Missing source_audio or target_audio file"}), 400
 
+    temp_files = [] # Initialize temp_files here
     try:
         source_file = request.files['source_audio']
         target_file = request.files['target_audio']
@@ -459,7 +460,7 @@ def handle_pitch_transfer():
                         mimetype="audio/wav")
         
     except Exception as e:
-        logger.error(f"Error in handle_pitch_transfer: {str(e)}")
+        logger.error(f"Error in process_audio: {str(e)}")
         # Clean up files in case of error
         for file_path in temp_files:
             safe_remove(file_path)
