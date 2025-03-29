@@ -31,7 +31,7 @@ CORS(app, resources={r"/*": {
 
 # Configure upload folder
 UPLOAD_FOLDER = '/tmp'
-ALLOWED_EXTENSIONS = {'wav', 'mp3', 'ogg', 'flac'}
+ALLOWED_EXTENSIONS = {'wav', 'mp3', 'ogg', 'flac', 'm4a', 'aac'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 
@@ -47,6 +47,56 @@ def safe_remove(file_path):
     except Exception as e:
         logger.error(f"Error removing file {file_path}: {str(e)}")
 
+def convert_to_wav(input_file):
+    """Converts an audio file to WAV format if it isn't already.
+
+    Args:
+        input_file (str): Path to the input audio file.
+
+    Returns:
+        tuple: (str, bool) - Path to the WAV file and True if it's a temporary file, False otherwise.
+               Returns (input_file, False) if the input is already WAV.
+               
+    Raises:
+        Exception: If conversion fails.
+    """
+    filename = os.path.basename(input_file)
+    name, ext = os.path.splitext(filename)
+    
+    # Check if already WAV
+    if ext.lower() == '.wav':
+        logger.info(f"Input file is already WAV: {input_file}")
+        # Basic validation of WAV file
+        try:
+            with sf.SoundFile(input_file) as f:
+                logger.info(f"Validated WAV: {f.channels} channels, {f.samplerate} Hz, {f.subtype}")
+            return input_file, False # Not a temporary file
+        except Exception as e:
+            logger.error(f"Input file {input_file} has .wav extension but is not a valid sound file: {e}")
+            raise Exception(f"Invalid WAV file provided: {filename}")
+
+    # Generate temporary output path
+    temp_output_dir = app.config['UPLOAD_FOLDER']
+    output_filename = f"{uuid.uuid4()}_converted_{name}.wav"
+    output_file = os.path.join(temp_output_dir, output_filename)
+    logger.info(f"Converting {input_file} to temporary WAV: {output_file}")
+
+    try:
+        data, samplerate = sf.read(input_file)
+        sf.write(output_file, data, samplerate, format='WAV', subtype='PCM_16')
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            logger.info(f"Successfully converted to WAV: {output_file} ({os.path.getsize(output_file)} bytes)")
+            return output_file, True # It's a temporary file
+        else:
+            logger.error(f"soundfile conversion failed to produce output file")
+            raise Exception("soundfile conversion failed to produce output file")
+    except Exception as e:
+        # Clean up failed output file if it exists
+        if os.path.exists(output_file):
+            safe_remove(output_file)
+        logger.error(f"Error converting file with soundfile {input_file}: {e}")
+        raise Exception(f"Failed to convert audio file {filename}: {str(e)}")
+
 def is_valid_wav(file_path):
     """Check if a file is a valid WAV file."""
     try:
@@ -56,68 +106,6 @@ def is_valid_wav(file_path):
     except Exception as e:
         logger.error(f"Error checking WAV file {file_path}: {str(e)}")
     return False
-
-def convert_to_wav(input_file, output_file=None):
-    """Convert audio file to WAV format using ffmpeg or soundfile as fallback"""
-    if output_file is None:
-        output_file = f"/tmp/{os.path.splitext(os.path.basename(input_file))[0]}_{uuid.uuid4()}.wav"
-    
-    # Check if the file is already a WAV file with the right format
-    if is_valid_wav(input_file):
-        logger.info(f"File {input_file} is already a valid WAV file")
-        return input_file, False
-    
-    # First try with ffmpeg if available
-    try:
-        # Check if ffmpeg is available without running the full conversion
-        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True, timeout=1)
-        
-        logger.info(f"Converting {input_file} to WAV using ffmpeg")
-        subprocess.run([
-            'ffmpeg', '-y', '-i', input_file, 
-            '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '1',
-            output_file
-        ], capture_output=True, check=True)
-        
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            logger.info(f"Successfully converted to WAV: {output_file} ({os.path.getsize(output_file)} bytes)")
-            return output_file, True
-        else:
-            logger.error(f"ffmpeg conversion failed to produce output file")
-            raise Exception("ffmpeg conversion failed to produce output file")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error converting file {input_file}: {e}")
-        logger.warning(f"ffmpeg conversion failed, trying soundfile: {e}")
-    except FileNotFoundError as e:
-        logger.warning(f"ffmpeg not found, using soundfile instead: {e}")
-    except Exception as e:
-        logger.error(f"Error converting file {input_file}: {e}")
-        logger.warning(f"ffmpeg conversion failed, trying soundfile: {e}")
-    
-    # Fallback to soundfile
-    try:
-        logger.info(f"Converting {input_file} to WAV using soundfile")
-        audio_data, sample_rate = sf.read(input_file)
-        sf.write(output_file, audio_data, sample_rate, subtype='PCM_16', format='WAV')
-        
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            logger.info(f"Successfully converted to WAV: {output_file} ({os.path.getsize(output_file)} bytes)")
-            return output_file, True
-        else:
-            logger.error(f"soundfile conversion failed to produce output file")
-            raise Exception("soundfile conversion failed to produce output file")
-    except Exception as e:
-        logger.error(f"Error converting file with soundfile {input_file}: {e}")
-        raise Exception(f"Failed to convert audio file: {str(e)}")
-
-def safe_remove(file_path):
-    """Safely remove a file if it exists."""
-    try:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            logger.info(f"Removed file: {file_path}")
-    except Exception as e:
-        logger.error(f"Error removing file {file_path}: {str(e)}")
 
 def transfer_pitch(source_file, target_file, output_file, 
                   time_step=0.0075, min_pitch=75, max_pitch=400,
@@ -159,28 +147,27 @@ def transfer_pitch(source_file, target_file, output_file,
     str
         Path to output audio file
     """
-    source_wav = None
-    target_wav = None
-    output_path = None
+    source_wav_path, source_is_temp = convert_to_wav(source_file)
+    target_wav_path, target_is_temp = convert_to_wav(target_file)
     temp_files = []
+    if source_is_temp:
+        temp_files.append(source_wav_path)
+    if target_is_temp:
+        temp_files.append(target_wav_path)
 
     try:
         # Ensure output directory exists
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
-        # Convert files to WAV if necessary
-        source_wav, source_temp = convert_to_wav(source_file, "source", temp_files)
-        target_wav, target_temp = convert_to_wav(target_file, "target", temp_files)
-        
-        logger.info(f"Processing files: source={source_wav}, target={target_wav}")
+        logger.info(f"Processing files: source={source_wav_path}, target={target_wav_path}")
 
         # Load sounds
-        logger.info(f"Loading source sound from {source_wav}")
-        source_sound = parselmouth.Sound(source_wav)
+        logger.info(f"Loading source sound from {source_wav_path}")
+        source_sound = parselmouth.Sound(source_wav_path)
         logger.info(f"Source sound loaded: duration={source_sound.duration} seconds, sampling frequency={source_sound.sampling_frequency} Hz")
         
-        logger.info(f"Loading target sound from {target_wav}")
-        target_sound = parselmouth.Sound(target_wav)
+        logger.info(f"Loading target sound from {target_wav_path}")
+        target_sound = parselmouth.Sound(target_wav_path)
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
         # --- Pitch Extraction using Autocorrelation (to_pitch) ---
@@ -346,11 +333,12 @@ def transfer_pitch(source_file, target_file, output_file,
         logger.error(f"Error in transfer_pitch: {str(e)}")
         return False, str(e)
     finally:
-        # Clean up temporary WAV files
-        if source_wav and source_wav != source_file:
-            safe_remove(source_wav)
-        if target_wav and target_wav != target_file:
-            safe_remove(target_wav)
+        # Clean up temporary WAV files added to the list
+        logger.info(f"Cleaning up temporary files: {temp_files}")
+        for temp_file_path in temp_files:
+            safe_remove(temp_file_path)
+        # Note: We don't remove the final output_file here, 
+        # that's handled by the API route after sending the response.
 
 @app.route('/health', methods=['GET'])
 def health_check():
