@@ -173,14 +173,16 @@ def transfer_pitch(source_file, target_file, output_file,
         source_pitch = call(
             source_sound, 
             "To Pitch (cc)...", 
-            time_step, 
-            min_pitch, 
-            15,  # frames_per_period (default)
-            max_pitch, 
-            voicing_threshold, 
-            octave_cost, 
-            octave_jump_cost, 
-            voiced_unvoiced_cost
+            time_step,            # 1. Time step (s)
+            min_pitch,            # 2. Pitch floor (Hz)
+            15,                   # 3. Max number of candidates
+            # 4. Very accurate ('yes'/'no') - omitted for default 'no'
+            0.03,                 # 5. Silence threshold (Praat default)
+            voicing_threshold,    # 6. Voicing threshold
+            octave_cost,          # 7. Octave cost
+            octave_jump_cost,     # 8. Octave-jump cost
+            voiced_unvoiced_cost, # 9. Voiced/unvoiced cost
+            max_pitch             # 10. Pitch ceiling (Hz)
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
