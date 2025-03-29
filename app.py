@@ -66,14 +66,15 @@ def convert_to_wav(input_file):
     # Check if already WAV
     if ext.lower() == '.wav':
         logger.info(f"Input file is already WAV: {input_file}")
-        # Basic validation of WAV file
+        # Basic validation of WAV file - but don't fail if validation fails
         try:
             with sf.SoundFile(input_file) as f:
                 logger.info(f"Validated WAV: {f.channels} channels, {f.samplerate} Hz, {f.subtype}")
-            return input_file, False # Not a temporary file
         except Exception as e:
-            logger.error(f"Input file {input_file} has .wav extension but is not a valid sound file: {e}")
-            raise Exception(f"Invalid WAV file provided: {filename}")
+            # Log the error but continue anyway - Parselmouth might be able to handle it
+            logger.warning(f"Input file {input_file} has .wav extension but soundfile couldn't validate it: {e}")
+            logger.info(f"Attempting to use the file anyway, Parselmouth may be able to handle it")
+        return input_file, False # Not a temporary file
 
     # Generate temporary output path
     temp_output_dir = app.config['UPLOAD_FOLDER']
