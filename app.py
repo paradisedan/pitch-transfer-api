@@ -135,7 +135,7 @@ def convert_to_wav_with_ffmpeg(input_file, output_file):
         raise Exception(f"Failed to fix WAV file: {str(e)}")
 
 def transfer_pitch(source_file, target_file, output_file, 
-                  time_step=0.0025, min_pitch=100, max_pitch=350,
+                  time_step=0.01, min_pitch=100, max_pitch=350,
                   resynthesis_method="psola", voicing_threshold=0.35,
                   octave_cost=0.015, octave_jump_cost=0.6, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
@@ -377,7 +377,7 @@ def process_audio():
         target_file = request.files['target_audio']
         
         # Get parameters from request with fine-tuned defaults
-        time_step = float(request.form.get('time_step', 0.0025))
+        time_step = float(request.form.get('time_step', 0.01))
         min_pitch = float(request.form.get('min_pitch', 100))
         max_pitch = float(request.form.get('max_pitch', 350))
         resynthesis_method = request.form.get('resynthesis_method', 'psola')
