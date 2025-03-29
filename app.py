@@ -120,7 +120,7 @@ def safe_remove(file_path):
         logger.error(f"Error removing file {file_path}: {str(e)}")
 
 def transfer_pitch(source_file, target_file, output_file, 
-                  time_step=0.005, min_pitch=75, max_pitch=300,
+                  time_step=0.01, min_pitch=75, max_pitch=600,
                   resynthesis_method="psola", voicing_threshold=0.3,
                   octave_cost=0.01, octave_jump_cost=0.5, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
@@ -177,14 +177,14 @@ def transfer_pitch(source_file, target_file, output_file,
         )
         logger.info(f"Source pitch extracted: {source_pitch}")
         
-        # Smooth the pitch contour for better quality
-        logger.info("Smoothing pitch contour")
-        try:
-            smoothed_pitch = source_pitch.smooth(bandwidth=2)  # Bandwidth of 2 semitones
-            logger.info("Pitch contour smoothed successfully")
-            source_pitch = smoothed_pitch
-        except Exception as e:
-            logger.warning(f"Failed to smooth pitch contour: {str(e)}")
+        # Smoothing removed for this experiment
+        # logger.info("Smoothing pitch contour")
+        # try:
+        #     smoothed_pitch = source_pitch.smooth(bandwidth=2)  # Bandwidth of 2 semitones
+        #     logger.info("Pitch contour smoothed successfully")
+        #     source_pitch = smoothed_pitch
+        # except Exception as e:
+        #     logger.warning(f"Failed to smooth pitch contour: {str(e)}")
         
         # Create manipulation object with specified parameters
         logger.info(f"Creating manipulation object with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
@@ -336,9 +336,9 @@ def process_audio():
         target_file = request.files['target_audio']
         
         # Get parameters from request with defaults
-        time_step = float(request.form.get('time_step', 0.005))  # Default to 0.005
+        time_step = float(request.form.get('time_step', 0.01))  # Default to 0.01
         min_pitch = float(request.form.get('min_pitch', 75))
-        max_pitch = float(request.form.get('max_pitch', 300))  # Default to 300
+        max_pitch = float(request.form.get('max_pitch', 600))  # Default to 600
         resynthesis_method = request.form.get('resynthesis_method', 'psola')  # Default to psola
         voicing_threshold = float(request.form.get('voicing_threshold', 0.3))
         octave_cost = float(request.form.get('octave_cost', 0.01))
