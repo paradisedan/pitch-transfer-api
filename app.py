@@ -135,7 +135,7 @@ def convert_to_wav_with_ffmpeg(input_file, output_file):
         raise Exception(f"Failed to fix WAV file: {str(e)}")
 
 def transfer_pitch(source_file, target_file, output_file, 
-                  time_step=0.0, min_pitch=75, max_pitch=500,
+                  time_step=0.01, min_pitch=100, max_pitch=350,
                   resynthesis_method="psola", voicing_threshold=0.45,
                   octave_cost=0.01, octave_jump_cost=0.35, voiced_unvoiced_cost=0.14,
                   preserve_formants=True):
