@@ -204,12 +204,47 @@ def _choose_lag_seconds(target_times, target_voiced, source_times, source_voiced
 
     return best_lag
 
+def _apply_voiced_postprocessing(st_values, voiced_mask, window_len, max_semitone_step):
+    st_out = np.array(st_values, copy=True)
+    n = int(st_out.size)
+    i = 0
+    while i < n:
+        if (not voiced_mask[i]) or (not np.isfinite(st_out[i])):
+            i += 1
+            continue
+
+        j = i
+        while j < n and voiced_mask[j] and np.isfinite(st_out[j]):
+            j += 1
+
+        seg = st_out[i:j]
+
+        max_step = float(max_semitone_step) if max_semitone_step is not None else 0.0
+        if max_step > 0 and seg.size > 1:
+            for k in range(1, int(seg.size)):
+                delta = float(seg[k] - seg[k - 1])
+                if delta > max_step:
+                    delta = max_step
+                elif delta < -max_step:
+                    delta = -max_step
+                seg[k] = seg[k - 1] + delta
+
+        wl = int(window_len) if window_len is not None else 1
+        if wl > 1 and seg.size > 1:
+            seg = _smooth_1d(seg, min(wl, int(seg.size)))
+
+        st_out[i:j] = seg
+        i = j
+
+    return st_out
+
 def transfer_pitch(source_file, target_file, output_file, 
                   time_step=0.01, min_pitch=100, max_pitch=350,
                   resynthesis_method="psola", voicing_threshold=0.45,
                   octave_cost=0.01, octave_jump_cost=0.35, voiced_unvoiced_cost=0.14,
                   preserve_formants=False, strength=0.9, baseline_smooth_ms=200.0,
-                  deviation_smooth_ms=80.0, alignment_mode="scale"):
+                  deviation_smooth_ms=120.0, alignment_mode="scale",
+                  post_smooth_ms=50.0, max_semitone_step=0.6, point_step=2, boundary_skip_ms=10.0):
     """
     Transfer pitch from source audio file to target audio file.
     
@@ -334,6 +369,13 @@ def transfer_pitch(source_file, target_file, output_file,
         new_tgt_st = np.array(tgt_st, copy=True)
         new_tgt_st[tgt_voiced] = tgt_st[tgt_voiced] + strength * dev_mapped[tgt_voiced]
 
+        tgt_dt = float(np.median(np.diff(tgt_times))) if tgt_times.size > 1 else float(time_step)
+        if not np.isfinite(tgt_dt) or tgt_dt <= 0:
+            tgt_dt = float(time_step) if time_step > 0 else 0.01
+
+        post_window = int(max(1, round((float(post_smooth_ms) / 1000.0) / tgt_dt)))
+        new_tgt_st = _apply_voiced_postprocessing(new_tgt_st, tgt_voiced, post_window, max_semitone_step)
+
         new_tgt_f0 = np.full_like(tgt_f0, np.nan)
         new_tgt_f0[tgt_voiced] = np.power(2.0, new_tgt_st[tgt_voiced] / 12.0)
         new_tgt_f0 = np.clip(new_tgt_f0, min_pitch, max_pitch)
@@ -353,9 +395,42 @@ def transfer_pitch(source_file, target_file, output_file,
         
         logger.info("Creating new pitch tier for target (relative intonation transfer)")
         new_pitch_tier = call("Create PitchTier", "newPitch", 0.0, float(target_sound.duration))
-        for t, f0 in zip(tgt_times, new_tgt_f0):
-            if np.isfinite(f0):
-                call(new_pitch_tier, "Add point", float(t), float(f0))
+        step = int(point_step)
+        if step < 1:
+            step = 1
+        boundary_skip_frames = int(round((float(boundary_skip_ms) / 1000.0) / tgt_dt)) if tgt_dt > 0 else 0
+        if boundary_skip_frames < 0:
+            boundary_skip_frames = 0
+
+        points_added = 0
+        n = int(tgt_times.size)
+        i = 0
+        while i < n:
+            if not np.isfinite(new_tgt_f0[i]):
+                i += 1
+                continue
+
+            j = i
+            while j < n and np.isfinite(new_tgt_f0[j]):
+                j += 1
+
+            start = i + boundary_skip_frames
+            end = j - boundary_skip_frames
+            if end <= start:
+                mid = int((i + j - 1) // 2)
+                if np.isfinite(new_tgt_f0[mid]):
+                    call(new_pitch_tier, "Add point", float(tgt_times[mid]), float(new_tgt_f0[mid]))
+                    points_added += 1
+            else:
+                for k in range(int(start), int(end), int(step)):
+                    if np.isfinite(new_tgt_f0[k]):
+                        call(new_pitch_tier, "Add point", float(tgt_times[k]), float(new_tgt_f0[k]))
+                        points_added += 1
+
+            i = j
+
+        if points_added == 0:
+            raise Exception("No voiced pitch points after smoothing/decimation")
 
         logger.info("Replacing pitch tier in manipulation")
         call([manipulation, new_pitch_tier], "Replace pitch tier")
@@ -512,15 +587,19 @@ def process_audio():
         min_pitch = float(request.form.get('min_pitch', 75))
         max_pitch = float(request.form.get('max_pitch', 500))
         resynthesis_method = request.form.get('resynthesis_method', 'psola')
-        voicing_threshold = float(request.form.get('voicing_threshold', 0.45))
+        voicing_threshold = float(request.form.get('voicing_threshold', 0.5))
         octave_cost = float(request.form.get('octave_cost', 0.01))
         octave_jump_cost = float(request.form.get('octave_jump_cost', 0.35))
-        voiced_unvoiced_cost = float(request.form.get('voiced_unvoiced_cost', 0.14))
+        voiced_unvoiced_cost = float(request.form.get('voiced_unvoiced_cost', 0.25))
         preserve_formants = request.form.get('preserve_formants', 'False').lower() == 'true'
         strength = float(request.form.get('strength', 0.9))
-        baseline_smooth_ms = float(request.form.get('baseline_smooth_ms', 200.0))
-        deviation_smooth_ms = float(request.form.get('deviation_smooth_ms', 80.0))
+        baseline_smooth_ms = float(request.form.get('baseline_smooth_ms', 250.0))
+        deviation_smooth_ms = float(request.form.get('deviation_smooth_ms', 120.0))
         alignment_mode = request.form.get('alignment_mode', 'scale')
+        post_smooth_ms = float(request.form.get('post_smooth_ms', 50.0))
+        max_semitone_step = float(request.form.get('max_semitone_step', 0.6))
+        point_step = int(request.form.get('point_step', 2))
+        boundary_skip_ms = float(request.form.get('boundary_skip_ms', 10.0))
         
         # Log received files and parameters
         logger.info(f"Received files: source={source_file.filename} ({source_file.mimetype}), target={target_file.filename} ({target_file.mimetype})")
@@ -528,7 +607,8 @@ def process_audio():
             f"Processing parameters: time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, "
             f"resynthesis_method={resynthesis_method}, voicing_threshold={voicing_threshold}, octave_cost={octave_cost}, "
             f"octave_jump_cost={octave_jump_cost}, voiced_unvoiced_cost={voiced_unvoiced_cost}, preserve_formants={preserve_formants}, "
-            f"strength={strength}, baseline_smooth_ms={baseline_smooth_ms}, deviation_smooth_ms={deviation_smooth_ms}, alignment_mode={alignment_mode}"
+            f"strength={strength}, baseline_smooth_ms={baseline_smooth_ms}, deviation_smooth_ms={deviation_smooth_ms}, alignment_mode={alignment_mode}, "
+            f"post_smooth_ms={post_smooth_ms}, max_semitone_step={max_semitone_step}, point_step={point_step}, boundary_skip_ms={boundary_skip_ms}"
         )
 
         # Create unique filenames with different UUIDs
@@ -581,7 +661,11 @@ def process_audio():
             strength=strength,
             baseline_smooth_ms=baseline_smooth_ms,
             deviation_smooth_ms=deviation_smooth_ms,
-            alignment_mode=alignment_mode
+            alignment_mode=alignment_mode,
+            post_smooth_ms=post_smooth_ms,
+            max_semitone_step=max_semitone_step,
+            point_step=point_step,
+            boundary_skip_ms=boundary_skip_ms
         )
         
         if not success:
