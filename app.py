@@ -134,11 +134,82 @@ def convert_to_wav_with_ffmpeg(input_file, output_file):
         logger.error(f"Error fixing WAV file {input_file}: {e}")
         raise Exception(f"Failed to fix WAV file: {str(e)}")
 
+def _extract_pitch(sound, time_step, min_pitch, max_pitch, voicing_threshold, octave_cost, octave_jump_cost, voiced_unvoiced_cost):
+    return parselmouth.praat.call(
+        sound,
+        "To Pitch (ac)...",
+        time_step,
+        min_pitch,
+        15,
+        voicing_threshold,
+        0.03,
+        0.45,
+        octave_cost,
+        octave_jump_cost,
+        voiced_unvoiced_cost,
+        max_pitch,
+    )
+
+def _pitch_to_arrays(pitch_obj):
+    try:
+        times = pitch_obj.xs()
+        freqs = pitch_obj.selected_array["frequency"].astype(float)
+        freqs = np.where(freqs > 0, freqs, np.nan)
+        return times.astype(float), freqs
+    except Exception:
+        n_frames = int(call(pitch_obj, "Get number of frames"))
+        times = np.empty(n_frames, dtype=float)
+        freqs = np.empty(n_frames, dtype=float)
+        for i in range(1, n_frames + 1):
+            t = float(call(pitch_obj, "Get time from frame number", i))
+            f0 = float(call(pitch_obj, "Get value in frame", i, "Hertz"))
+            times[i - 1] = t
+            freqs[i - 1] = f0 if f0 > 0 else np.nan
+        return times, freqs
+
+def _smooth_1d(x, window_len):
+    if window_len <= 1:
+        return x
+    window = np.ones(int(window_len), dtype=float)
+    window /= window.sum()
+    return np.convolve(x, window, mode="same")
+
+def _interp_nan_1d(x):
+    x = x.astype(float)
+    n = x.size
+    if n == 0:
+        return x
+    idx = np.arange(n)
+    good = np.isfinite(x)
+    if not np.any(good):
+        return np.full_like(x, np.nan)
+    return np.interp(idx, idx[good], x[good])
+
+def _choose_lag_seconds(target_times, target_voiced, source_times, source_voiced, scale, lag_candidates_s):
+    if target_times.size == 0 or source_times.size == 0:
+        return 0.0
+
+    src_t = source_times
+    src_v = source_voiced.astype(float)
+    best_lag = 0.0
+    best_score = -1.0
+
+    for lag in lag_candidates_s:
+        mapped = target_times * scale + lag
+        src_v_mapped = np.interp(mapped, src_t, src_v, left=0.0, right=0.0)
+        score = float(np.dot(src_v_mapped, target_voiced.astype(float)))
+        if score > best_score:
+            best_score = score
+            best_lag = float(lag)
+
+    return best_lag
+
 def transfer_pitch(source_file, target_file, output_file, 
                   time_step=0.01, min_pitch=100, max_pitch=350,
                   resynthesis_method="psola", voicing_threshold=0.45,
                   octave_cost=0.01, octave_jump_cost=0.35, voiced_unvoiced_cost=0.14,
-                  preserve_formants=True):
+                  preserve_formants=False, strength=0.9, baseline_smooth_ms=200.0,
+                  deviation_smooth_ms=80.0, alignment_mode="scale"):
     """
     Transfer pitch from source audio file to target audio file.
     
@@ -197,30 +268,97 @@ def transfer_pitch(source_file, target_file, output_file,
         target_sound = parselmouth.Sound(target_wav_path)
         logger.info(f"Target sound loaded: duration={target_sound.duration} seconds, sampling frequency={target_sound.sampling_frequency} Hz")
         
-        # Extract pitch using Praat's defaults for broader applicability
-        # time_step=0.0 lets Praat determine the optimal step
-        pitch = parselmouth.praat.call(source_sound, "To Pitch (ac)...", 
-                                     time_step,         # Let Praat decide (usually ~0.01)
-                                     min_pitch,         # 75 Hz default
-                                     15,                # Silence threshold (Praat default)
-                                     voicing_threshold, # 0.45 default
-                                     0.03,              # Voicing pulse (Praat default)
-                                     0.45,              # Voicing slope (Praat default)
-                                     octave_cost,       # 0.01 default
-                                     octave_jump_cost,  # 0.35 default
-                                     voiced_unvoiced_cost,# 0.14 default
-                                     max_pitch)         # 500 Hz default
+        source_pitch = _extract_pitch(
+            source_sound,
+            time_step,
+            min_pitch,
+            max_pitch,
+            voicing_threshold,
+            octave_cost,
+            octave_jump_cost,
+            voiced_unvoiced_cost,
+        )
+
+        target_pitch = _extract_pitch(
+            target_sound,
+            time_step,
+            min_pitch,
+            max_pitch,
+            voicing_threshold,
+            octave_cost,
+            octave_jump_cost,
+            voiced_unvoiced_cost,
+        )
+
+        src_times, src_f0 = _pitch_to_arrays(source_pitch)
+        tgt_times, tgt_f0 = _pitch_to_arrays(target_pitch)
+
+        tgt_voiced = np.isfinite(tgt_f0)
+        src_voiced = np.isfinite(src_f0)
+
+        if tgt_times.size == 0 or src_times.size == 0:
+            raise Exception("Pitch extraction returned no frames")
+
+        scale = float(source_sound.duration / target_sound.duration) if target_sound.duration > 0 else 1.0
+
+        lag_s = 0.0
+        if str(alignment_mode).lower() == "scale+lag":
+            lag_candidates_s = np.arange(-0.05, 0.051, 0.005)
+            lag_s = _choose_lag_seconds(tgt_times, tgt_voiced, src_times, src_voiced, scale, lag_candidates_s)
+            logger.info(f"Alignment (scale+lag): scale={scale:.6f}, lag={lag_s:.4f}s")
+        else:
+            logger.info(f"Alignment (scale): scale={scale:.6f}")
+
+        src_st = 12.0 * np.log2(src_f0)
+        tgt_st = 12.0 * np.log2(tgt_f0)
+
+        src_st_filled = _interp_nan_1d(src_st)
+
+        src_dt = float(np.median(np.diff(src_times))) if src_times.size > 1 else float(time_step)
+        if not np.isfinite(src_dt) or src_dt <= 0:
+            src_dt = float(time_step) if time_step > 0 else 0.01
+
+        baseline_window = int(max(1, round((baseline_smooth_ms / 1000.0) / src_dt)))
+        baseline_st = _smooth_1d(src_st_filled, baseline_window)
+        dev_st = src_st_filled - baseline_st
+
+        dev_window = int(max(1, round((deviation_smooth_ms / 1000.0) / src_dt)))
+        dev_st = _smooth_1d(dev_st, dev_window)
+
+        mapped_src_t = tgt_times * scale + lag_s
+        dev_mapped = np.interp(mapped_src_t, src_times, dev_st, left=0.0, right=0.0)
+
+        strength = float(strength)
+        strength = 0.0 if strength < 0 else (1.0 if strength > 1.0 else strength)
+
+        new_tgt_st = np.array(tgt_st, copy=True)
+        new_tgt_st[tgt_voiced] = tgt_st[tgt_voiced] + strength * dev_mapped[tgt_voiced]
+
+        new_tgt_f0 = np.full_like(tgt_f0, np.nan)
+        new_tgt_f0[tgt_voiced] = np.power(2.0, new_tgt_st[tgt_voiced] / 12.0)
+        new_tgt_f0 = np.clip(new_tgt_f0, min_pitch, max_pitch)
+
+        if np.any(tgt_voiced):
+            logger.info(
+                "Pitch stats (Hz): "
+                f"src_med={float(np.nanmedian(src_f0)):.2f}, "
+                f"tgt_med={float(np.nanmedian(tgt_f0)):.2f}, "
+                f"new_med={float(np.nanmedian(new_tgt_f0)):.2f}, "
+                f"strength={strength}"
+            )
         
         # Create manipulation object with specified parameters
         logger.info(f"Creating manipulation object with time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}")
         manipulation = call(target_sound, "To Manipulation", time_step, min_pitch, max_pitch)
         
-        # Replace pitch tier with source pitch
-        logger.info("Creating pitch tier from source pitch")
-        source_pitch_tier = call([pitch], "Down to PitchTier")
-        
+        logger.info("Creating new pitch tier for target (relative intonation transfer)")
+        new_pitch_tier = call("Create PitchTier", "newPitch", 0.0, float(target_sound.duration))
+        for t, f0 in zip(tgt_times, new_tgt_f0):
+            if np.isfinite(f0):
+                call(new_pitch_tier, "Add point", float(t), float(f0))
+
         logger.info("Replacing pitch tier in manipulation")
-        call([manipulation, source_pitch_tier], "Replace pitch tier")
+        call([manipulation, new_pitch_tier], "Replace pitch tier")
         
         # Determine resynthesis command based on method
         if resynthesis_method.lower() == "psola":
@@ -370,7 +508,7 @@ def process_audio():
         target_file = request.files['target_audio']
         
         # Get parameters from request with standard Praat defaults
-        time_step = float(request.form.get('time_step', 0.0))
+        time_step = float(request.form.get('time_step', 0.01))
         min_pitch = float(request.form.get('min_pitch', 75))
         max_pitch = float(request.form.get('max_pitch', 500))
         resynthesis_method = request.form.get('resynthesis_method', 'psola')
@@ -378,11 +516,20 @@ def process_audio():
         octave_cost = float(request.form.get('octave_cost', 0.01))
         octave_jump_cost = float(request.form.get('octave_jump_cost', 0.35))
         voiced_unvoiced_cost = float(request.form.get('voiced_unvoiced_cost', 0.14))
-        preserve_formants = request.form.get('preserve_formants', 'True').lower() == 'true'
+        preserve_formants = request.form.get('preserve_formants', 'False').lower() == 'true'
+        strength = float(request.form.get('strength', 0.9))
+        baseline_smooth_ms = float(request.form.get('baseline_smooth_ms', 200.0))
+        deviation_smooth_ms = float(request.form.get('deviation_smooth_ms', 80.0))
+        alignment_mode = request.form.get('alignment_mode', 'scale')
         
         # Log received files and parameters
         logger.info(f"Received files: source={source_file.filename} ({source_file.mimetype}), target={target_file.filename} ({target_file.mimetype})")
-        logger.info(f"Processing parameters: time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, resynthesis_method={resynthesis_method}, voicing_threshold={voicing_threshold}, octave_cost={octave_cost}, octave_jump_cost={octave_jump_cost}, voiced_unvoiced_cost={voiced_unvoiced_cost}, preserve_formants={preserve_formants}")
+        logger.info(
+            f"Processing parameters: time_step={time_step}, min_pitch={min_pitch}, max_pitch={max_pitch}, "
+            f"resynthesis_method={resynthesis_method}, voicing_threshold={voicing_threshold}, octave_cost={octave_cost}, "
+            f"octave_jump_cost={octave_jump_cost}, voiced_unvoiced_cost={voiced_unvoiced_cost}, preserve_formants={preserve_formants}, "
+            f"strength={strength}, baseline_smooth_ms={baseline_smooth_ms}, deviation_smooth_ms={deviation_smooth_ms}, alignment_mode={alignment_mode}"
+        )
 
         # Create unique filenames with different UUIDs
         source_filename = f"{uuid.uuid4()}_source_{secure_filename(source_file.filename)}"
@@ -410,6 +557,12 @@ def process_audio():
             logger.error("Uploaded files are empty")
             return jsonify({"error": "Uploaded files are empty"}), 400
         
+        # --- Add validation for time_step ---
+        if time_step <= 0:
+            logger.error(f"Invalid time_step received: {time_step}. Must be greater than 0.")
+            return jsonify({"error": f"Invalid time_step: {time_step}. Must be greater than 0."}), 400
+        # --- End validation ---
+
         # Process audio files with new parameters
         logger.info(f"Starting pitch transfer process: source={source_path}, target={target_path}, output={output_path}")
         success, message = transfer_pitch(
@@ -424,7 +577,11 @@ def process_audio():
             octave_cost=octave_cost,
             octave_jump_cost=octave_jump_cost,
             voiced_unvoiced_cost=voiced_unvoiced_cost,
-            preserve_formants=False # Temporarily disable for debugging
+            preserve_formants=preserve_formants,
+            strength=strength,
+            baseline_smooth_ms=baseline_smooth_ms,
+            deviation_smooth_ms=deviation_smooth_ms,
+            alignment_mode=alignment_mode
         )
         
         if not success:
